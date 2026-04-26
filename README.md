@@ -71,6 +71,12 @@ This writes:
 The included demo currently solves to an optimal schedule with four scheduled
 lessons, no unscheduled lessons, and one moved lesson caused by an absence.
 
+For terminal review, print the selected schedule and changes directly:
+
+```bash
+uv run python run_solver_from_csv.py --input csv_demo_input --output solution.json --print-summary --print-solution
+```
+
 ## CSV Input
 
 CSV input is stored as one folder with required and optional files.
@@ -93,6 +99,22 @@ Optional files:
 
 See [csv_input_schema.md](csv_input_schema.md) for the full CSV contract,
 supported values, and examples.
+
+Create a starter CSV input folder:
+
+```bash
+uv run python run_solver_from_csv.py --init-template my_schedule_input
+```
+
+Validate an input folder without solving:
+
+```bash
+uv run python run_solver_from_csv.py --input my_schedule_input --validate-only
+```
+
+Excel or Google Sheets users can edit the generated CSV files directly, or keep
+one sheet per CSV file and export each sheet back to CSV before running the
+solver.
 
 ## Programmatic Usage
 

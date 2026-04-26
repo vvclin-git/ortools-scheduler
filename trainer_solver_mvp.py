@@ -16,6 +16,10 @@ else:
 
 
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+FROZEN_STATUSES = {"completed", "in_progress", "locked"}
+KNOWN_BOOKING_STATUSES = {"draft", "confirmed", *FROZEN_STATUSES}
+KNOWN_ABSENCE_ENTITY_TYPES = {"coach", "student", "venue"}
+UNKNOWN_TRAVEL_MIN = 10_000
 
 
 class SolverMode(str, Enum):
@@ -173,6 +177,7 @@ class SolverSummary:
     affected_students: int
     total_cross_venue_pair_penalty: int
     objective_value: Optional[int]
+    candidate_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -246,7 +251,7 @@ def build_travel_lookup(travel_times: List[TravelTime]) -> Dict[Tuple[str, str],
 def get_travel_min(lookup: Dict[Tuple[str, str], int], from_venue: str, to_venue: str) -> int:
     if from_venue == to_venue:
         return 0
-    return lookup.get((from_venue, to_venue), 10_000)
+    return lookup.get((from_venue, to_venue), UNKNOWN_TRAVEL_MIN)
 
 
 def get_preference_score(
@@ -300,6 +305,221 @@ def has_absence_conflict(
     return False
 
 
+def is_fixed_booking(config: SolverConfig, booking: ExistingBooking) -> bool:
+    if booking.status in FROZEN_STATUSES:
+        return True
+    if booking.lock_level >= 3:
+        return True
+    if config.mode == SolverMode.IN_WEEK_RESCHEDULE and config.freeze_policy is not None:
+        return parse_dt(booking.start_datetime) < config.freeze_policy.freeze_before
+    return False
+
+
+def fixed_booking_candidate(
+    lesson: LessonRequest,
+    booking: ExistingBooking,
+    preferences: List[StudentPreference],
+    candidate_id: str,
+) -> CandidateAssignment:
+    start = parse_dt(booking.start_datetime)
+    end = parse_dt(booking.end_datetime)
+    pref = get_preference_score(lesson.student_id, start, end, preferences) or ("locked", 0)
+    return CandidateAssignment(
+        candidate_id=candidate_id,
+        lesson_id=lesson.lesson_id,
+        student_id=lesson.student_id,
+        venue_id=lesson.venue_id,
+        start=start,
+        end=end,
+        preference_level=pref[0],
+        preference_score=pref[1],
+        candidate_score=10_000,
+        is_original_time=True,
+        is_fixed=True,
+    )
+
+
+def empty_response(status: str, lesson_count: int, warnings: List[str]) -> SolverResponse:
+    return SolverResponse(
+        status=status,
+        summary=SolverSummary(0, lesson_count, 0, 0, 0, None, 0),
+        schedule=[],
+        changes=[],
+        warnings=warnings,
+    )
+
+
+def find_duplicate_ids(ids: List[str]) -> List[str]:
+    seen = set()
+    duplicates = set()
+    for item_id in ids:
+        if item_id in seen:
+            duplicates.add(item_id)
+        seen.add(item_id)
+    return sorted(duplicates)
+
+
+def validate_request(req: SolverRequest) -> List[str]:
+    warnings: List[str] = []
+
+    try:
+        horizon_start = parse_dt(req.config.planning_start)
+        horizon_end = parse_dt(req.config.planning_end)
+    except ValueError as exc:
+        return [f"Invalid planning datetime: {exc}"]
+
+    if horizon_start >= horizon_end:
+        warnings.append("Invalid planning window: planning_start must be before planning_end")
+    if req.config.slot_size_min <= 0:
+        warnings.append("Invalid slot_size_min: must be greater than 0")
+    if req.config.max_solve_seconds <= 0:
+        warnings.append("Invalid max_solve_seconds: must be greater than 0")
+
+    student_ids = {student.student_id for student in req.students}
+    venue_ids = {venue.venue_id for venue in req.venues}
+    lesson_ids = {lesson.lesson_id for lesson in req.lessons}
+
+    for label, duplicates in [
+        ("student_id", find_duplicate_ids([student.student_id for student in req.students])),
+        ("venue_id", find_duplicate_ids([venue.venue_id for venue in req.venues])),
+        ("lesson_id", find_duplicate_ids([lesson.lesson_id for lesson in req.lessons])),
+        ("booking_id", find_duplicate_ids([booking.booking_id for booking in req.existing_bookings])),
+    ]:
+        if duplicates:
+            warnings.append(f"Duplicate {label} values: {duplicates}")
+
+    for lesson in req.lessons:
+        if lesson.student_id not in student_ids:
+            warnings.append(f"Lesson {lesson.lesson_id} references missing student_id={lesson.student_id}")
+        if lesson.venue_id not in venue_ids:
+            warnings.append(f"Lesson {lesson.lesson_id} references missing venue_id={lesson.venue_id}")
+        if lesson.duration_min <= 0:
+            warnings.append(f"Lesson {lesson.lesson_id} has invalid duration_min={lesson.duration_min}")
+
+    for pref in req.preferences:
+        if pref.student_id not in student_ids:
+            warnings.append(f"Preference references missing student_id={pref.student_id}")
+        if pref.day not in DAYS:
+            warnings.append(f"Preference for student_id={pref.student_id} has invalid day={pref.day}")
+        try:
+            if parse_time_min(pref.start) >= parse_time_min(pref.end):
+                warnings.append(f"Preference for student_id={pref.student_id} has start >= end")
+        except ValueError:
+            warnings.append(f"Preference for student_id={pref.student_id} has invalid time")
+
+    for window in req.coach_availability:
+        if window.day not in DAYS:
+            warnings.append(f"Coach availability has invalid day={window.day}")
+        try:
+            if parse_time_min(window.start) >= parse_time_min(window.end):
+                warnings.append("Coach availability has start >= end")
+        except ValueError:
+            warnings.append("Coach availability has invalid time")
+
+    for row in req.travel_times:
+        if row.from_venue_id not in venue_ids:
+            warnings.append(f"Travel time references missing from_venue_id={row.from_venue_id}")
+        if row.to_venue_id not in venue_ids:
+            warnings.append(f"Travel time references missing to_venue_id={row.to_venue_id}")
+        if row.travel_min < 0:
+            warnings.append(
+                f"Travel time {row.from_venue_id}->{row.to_venue_id} has negative travel_min={row.travel_min}"
+            )
+
+    for booking in req.existing_bookings:
+        if booking.lesson_id not in lesson_ids:
+            warnings.append(f"Booking {booking.booking_id} references missing lesson_id={booking.lesson_id}")
+        if booking.student_id not in student_ids:
+            warnings.append(f"Booking {booking.booking_id} references missing student_id={booking.student_id}")
+        if booking.venue_id not in venue_ids:
+            warnings.append(f"Booking {booking.booking_id} references missing venue_id={booking.venue_id}")
+        if booking.status not in KNOWN_BOOKING_STATUSES:
+            warnings.append(f"Booking {booking.booking_id} has unknown status={booking.status}")
+        if booking.lock_level < 0:
+            warnings.append(f"Booking {booking.booking_id} has invalid lock_level={booking.lock_level}")
+        try:
+            if parse_dt(booking.start_datetime) >= parse_dt(booking.end_datetime):
+                warnings.append(f"Booking {booking.booking_id} has start_datetime >= end_datetime")
+        except ValueError as exc:
+            warnings.append(f"Booking {booking.booking_id} has invalid datetime: {exc}")
+
+    for absence in req.absences:
+        if absence.entity_type not in KNOWN_ABSENCE_ENTITY_TYPES:
+            warnings.append(f"Absence has unknown entity_type={absence.entity_type}")
+        if absence.entity_type == "student" and absence.entity_id not in student_ids:
+            warnings.append(f"Absence references missing student_id={absence.entity_id}")
+        if absence.entity_type == "venue" and absence.entity_id not in venue_ids:
+            warnings.append(f"Absence references missing venue_id={absence.entity_id}")
+        try:
+            if parse_dt(absence.start_datetime) >= parse_dt(absence.end_datetime):
+                warnings.append(f"Absence {absence.entity_type}:{absence.entity_id} has start_datetime >= end_datetime")
+        except ValueError as exc:
+            warnings.append(f"Absence {absence.entity_type}:{absence.entity_id} has invalid datetime: {exc}")
+
+    return warnings
+
+
+def validate_fixed_bookings(req: SolverRequest) -> List[str]:
+    warnings: List[str] = []
+    horizon_start = parse_dt(req.config.planning_start)
+    horizon_end = parse_dt(req.config.planning_end)
+    lessons_by_id = {lesson.lesson_id: lesson for lesson in req.lessons}
+    travel_lookup = build_travel_lookup(req.travel_times)
+    fixed: List[Tuple[ExistingBooking, LessonRequest, datetime, datetime]] = []
+
+    for booking in req.existing_bookings:
+        lesson = lessons_by_id.get(booking.lesson_id)
+        if lesson is None or not is_fixed_booking(req.config, booking):
+            continue
+        start = parse_dt(booking.start_datetime)
+        end = parse_dt(booking.end_datetime)
+        fixed.append((booking, lesson, start, end))
+
+        if start < horizon_start or end > horizon_end:
+            warnings.append(f"Fixed booking {booking.booking_id} is outside the planning horizon")
+        if get_coach_availability_score(start, end, req.coach_availability) is None:
+            warnings.append(f"Fixed booking {booking.booking_id} is outside coach availability")
+        if has_absence_conflict(lesson, start, end, req.absences):
+            warnings.append(f"Fixed booking {booking.booking_id} conflicts with an absence")
+
+    for i in range(len(fixed)):
+        booking_a, lesson_a, start_a, end_a = fixed[i]
+        cand_a = CandidateAssignment(
+            "fixed_a",
+            lesson_a.lesson_id,
+            lesson_a.student_id,
+            lesson_a.venue_id,
+            start_a,
+            end_a,
+            "locked",
+            0,
+            0,
+            True,
+            True,
+        )
+        for j in range(i + 1, len(fixed)):
+            booking_b, lesson_b, start_b, end_b = fixed[j]
+            cand_b = CandidateAssignment(
+                "fixed_b",
+                lesson_b.lesson_id,
+                lesson_b.student_id,
+                lesson_b.venue_id,
+                start_b,
+                end_b,
+                "locked",
+                0,
+                0,
+                True,
+                True,
+            )
+            if not candidates_can_coexist(cand_a, cand_b, travel_lookup):
+                warnings.append(
+                    f"Fixed bookings {booking_a.booking_id} and {booking_b.booking_id} overlap or violate travel time"
+                )
+
+    return warnings
+
+
 def build_candidate_assignments(req: SolverRequest) -> Tuple[List[CandidateAssignment], List[str]]:
     warnings = []
     config = req.config
@@ -316,36 +536,15 @@ def build_candidate_assignments(req: SolverRequest) -> Tuple[List[CandidateAssig
 
     for lesson in req.lessons:
         existing = booking_by_lesson.get(lesson.lesson_id)
-        is_frozen = False
-        if existing is not None:
-            existing_start = parse_dt(existing.start_datetime)
-            if existing.status in {"completed", "in_progress", "locked"}:
-                is_frozen = True
-            if existing.lock_level >= 3:
-                is_frozen = True
-            if freeze_before is not None and existing_start < freeze_before:
-                is_frozen = True
+        is_frozen = existing is not None and is_fixed_booking(config, existing)
 
         if is_frozen and existing is not None:
-            pref = get_preference_score(
-                lesson.student_id,
-                parse_dt(existing.start_datetime),
-                parse_dt(existing.end_datetime),
-                req.preferences,
-            ) or ("locked", 0)
             candidates.append(
-                CandidateAssignment(
+                fixed_booking_candidate(
+                    lesson,
+                    existing,
+                    req.preferences,
                     candidate_id=f"cand_{len(candidates):04d}",
-                    lesson_id=lesson.lesson_id,
-                    student_id=lesson.student_id,
-                    venue_id=lesson.venue_id,
-                    start=parse_dt(existing.start_datetime),
-                    end=parse_dt(existing.end_datetime),
-                    preference_level=pref[0],
-                    preference_score=pref[1],
-                    candidate_score=10_000,
-                    is_original_time=True,
-                    is_fixed=True,
                 )
             )
             continue
@@ -425,10 +624,19 @@ def solve_schedule(req: SolverRequest) -> SolverResponse:
 
     config = req.config
     weights = config.weights
+    validation_warnings = validate_request(req)
+    if validation_warnings:
+        return empty_response("INFEASIBLE_INPUT", len(req.lessons), validation_warnings)
+
+    fixed_warnings = validate_fixed_bookings(req)
+    if fixed_warnings:
+        return empty_response("INFEASIBLE_INPUT", len(req.lessons), fixed_warnings)
+
     students = {s.student_id: s for s in req.students}
     venues = {v.venue_id: v for v in req.venues}
     booking_by_lesson = {b.lesson_id: b for b in req.existing_bookings}
     candidates, warnings = build_candidate_assignments(req)
+    candidate_count = len(candidates)
     candidates_by_lesson: Dict[str, List[CandidateAssignment]] = {}
     for cand in candidates:
         candidates_by_lesson.setdefault(cand.lesson_id, []).append(cand)
@@ -441,7 +649,7 @@ def solve_schedule(req: SolverRequest) -> SolverResponse:
     if missing_required:
         return SolverResponse(
             status="INFEASIBLE_INPUT",
-            summary=SolverSummary(0, len(req.lessons), 0, 0, 0, None),
+            summary=SolverSummary(0, len(req.lessons), 0, 0, 0, None, candidate_count),
             schedule=[],
             changes=[],
             warnings=warnings + [f"Required lessons have no candidates: {missing_required}"],
@@ -449,6 +657,7 @@ def solve_schedule(req: SolverRequest) -> SolverResponse:
 
     model = cp_model.CpModel()
     x = {cand.candidate_id: model.NewBoolVar(cand.candidate_id) for cand in candidates}
+    unscheduled_optional_vars = {}
 
     for lesson in req.lessons:
         lesson_vars = [x[c.candidate_id] for c in candidates_by_lesson.get(lesson.lesson_id, [])]
@@ -457,7 +666,9 @@ def solve_schedule(req: SolverRequest) -> SolverResponse:
         if lesson.must_schedule:
             model.Add(sum(lesson_vars) == 1)
         else:
-            model.Add(sum(lesson_vars) <= 1)
+            unscheduled_var = model.NewBoolVar(f"unscheduled_{lesson.lesson_id}")
+            model.Add(sum(lesson_vars) + unscheduled_var == 1)
+            unscheduled_optional_vars[lesson.lesson_id] = unscheduled_var
 
     for cand in candidates:
         if cand.is_fixed:
@@ -469,6 +680,9 @@ def solve_schedule(req: SolverRequest) -> SolverResponse:
 
     for cand in candidates:
         objective_terms.append(cand.candidate_score * x[cand.candidate_id])
+
+    for lesson_id, unscheduled_var in unscheduled_optional_vars.items():
+        objective_terms.append(-weights.cancel_optional_penalty * unscheduled_var)
 
     for i in range(len(candidates)):
         a = candidates[i]
@@ -501,7 +715,7 @@ def solve_schedule(req: SolverRequest) -> SolverResponse:
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return SolverResponse(
             status=solver.StatusName(status),
-            summary=SolverSummary(0, len(req.lessons), 0, 0, 0, None),
+            summary=SolverSummary(0, len(req.lessons), 0, 0, 0, None, candidate_count),
             schedule=[],
             changes=[],
             warnings=warnings + ["No feasible schedule found."],
@@ -593,6 +807,7 @@ def solve_schedule(req: SolverRequest) -> SolverResponse:
             affected_students=affected_students,
             total_cross_venue_pair_penalty=total_cross_penalty,
             objective_value=int(solver.ObjectiveValue()),
+            candidate_count=candidate_count,
         ),
         schedule=scheduled,
         changes=changes,

@@ -12,9 +12,15 @@ Or with uv:
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import io
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
+import run_solver_from_csv as csv_runner
 import trainer_solver_mvp as solver
 
 
@@ -219,6 +225,283 @@ class TrainerSolverMvpTests(unittest.TestCase):
 
         self.assertEqual("2026-05-06T17:00", bob.start_datetime)
         self.assertFalse(bob.is_changed)
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_overlapping_fixed_bookings_return_infeasible_input(self) -> None:
+        """Fixed bookings should be rejected before solve if they overlap."""
+        request = solver.make_demo_request()
+        request = copy.deepcopy(request)
+        request.absences[:] = []
+        request.existing_bookings[:] = [
+            solver.ExistingBooking(
+                "book_alice",
+                "lesson_alice",
+                "stu_alice",
+                "gym_a",
+                "2026-05-08T18:00:00",
+                "2026-05-08T19:00:00",
+                status="locked",
+                lock_level=3,
+            ),
+            solver.ExistingBooking(
+                "book_david",
+                "lesson_david",
+                "stu_david",
+                "gym_a",
+                "2026-05-08T18:30:00",
+                "2026-05-08T19:30:00",
+                status="locked",
+                lock_level=3,
+            ),
+        ]
+
+        response = solver.solve_schedule(request)
+
+        self.assertEqual("INFEASIBLE_INPUT", response.status)
+        self.assertIn("overlap", " ".join(response.warnings))
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_fixed_booking_with_absence_returns_infeasible_input(self) -> None:
+        """A fixed booking that conflicts with absence data should be rejected."""
+        request = solver.make_demo_request()
+        request = copy.deepcopy(request)
+        request.existing_bookings[:] = [
+            solver.ExistingBooking(
+                "book_bob",
+                "lesson_bob",
+                "stu_bob",
+                "gym_b",
+                "2026-05-07T19:00:00",
+                "2026-05-07T20:00:00",
+                status="locked",
+                lock_level=3,
+            )
+        ]
+
+        response = solver.solve_schedule(request)
+
+        self.assertEqual("INFEASIBLE_INPUT", response.status)
+        self.assertIn("absence", " ".join(response.warnings))
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_optional_lesson_without_candidates_does_not_make_solve_infeasible(self) -> None:
+        """Optional lessons with no candidate should be reported unscheduled, not infeasible."""
+        request = solver.make_demo_request()
+        request = copy.deepcopy(request)
+        request.lessons.append(
+            solver.LessonRequest(
+                "lesson_optional",
+                "stu_bob",
+                "gym_b",
+                duration_min=60,
+                must_schedule=False,
+            )
+        )
+
+        response = solver.solve_schedule(request)
+
+        self.assertIn(response.status, {"OPTIMAL", "FEASIBLE"})
+        by_change = {item.lesson_id: item for item in response.changes}
+        self.assertEqual("unscheduled", by_change["lesson_optional"].change_type)
+        self.assertEqual(1, response.summary.unscheduled_lessons)
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_optional_lesson_can_be_left_unscheduled_when_penalty_is_low(self) -> None:
+        """Optional feasible candidates should only be selected when the objective justifies it."""
+        request = solver.SolverRequest(
+            config=solver.SolverConfig(
+                mode=solver.SolverMode.WEEKLY_PLANNING,
+                planning_start="2026-05-04T17:00:00",
+                planning_end="2026-05-04T20:00:00",
+                slot_size_min=60,
+                max_solve_seconds=5.0,
+                weights=solver.ObjectiveWeights(cancel_optional_penalty=10),
+            ),
+            students=[solver.Student("stu_a", "Student A", "gym_a")],
+            venues=[solver.Venue("gym_a", "Gym A")],
+            travel_times=[],
+            lessons=[
+                solver.LessonRequest(
+                    "lesson_optional",
+                    "stu_a",
+                    "gym_a",
+                    duration_min=60,
+                    must_schedule=False,
+                    priority=0,
+                )
+            ],
+            preferences=[
+                solver.StudentPreference("stu_a", "Mon", "18:00", "19:00", "acceptable", 0)
+            ],
+            coach_availability=[
+                solver.CoachAvailability("Mon", "18:00", "19:00", score=-100)
+            ],
+        )
+
+        response = solver.solve_schedule(request)
+
+        self.assertIn(response.status, {"OPTIMAL", "FEASIBLE"})
+        self.assertEqual([], response.schedule)
+        self.assertEqual(1, response.summary.unscheduled_lessons)
+        self.assertEqual("unscheduled", response.changes[0].change_type)
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_missing_references_are_caught_before_solve(self) -> None:
+        """Invalid request references should return INFEASIBLE_INPUT instead of KeyError."""
+        request = solver.make_demo_request()
+        request = copy.deepcopy(request)
+        request.lessons[0] = solver.LessonRequest("lesson_alice", "missing_student", "gym_a")
+
+        response = solver.solve_schedule(request)
+
+        self.assertEqual("INFEASIBLE_INPUT", response.status)
+        self.assertIn("missing student_id", " ".join(response.warnings))
+
+    def test_unknown_travel_path_uses_large_fallback_minutes(self) -> None:
+        """Missing travel paths use an explicit large fallback rather than zero travel."""
+        self.assertEqual(10_000, solver.get_travel_min({}, "gym_a", "gym_b"))
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_duplicate_ids_are_rejected(self) -> None:
+        """Duplicate core IDs should be rejected at validation time."""
+        request = solver.make_demo_request()
+        request = copy.deepcopy(request)
+        request.students.append(
+            solver.Student("stu_alice", "Duplicate Alice", "gym_a")
+        )
+
+        response = solver.solve_schedule(request)
+
+        self.assertEqual("INFEASIBLE_INPUT", response.status)
+        self.assertIn("Duplicate student_id", " ".join(response.warnings))
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_demo_reports_candidate_count(self) -> None:
+        """The solver summary should expose candidate count for scale monitoring."""
+        request = solver.make_demo_request()
+        response = solver.solve_schedule(request)
+
+        self.assertIn(response.status, {"OPTIMAL", "FEASIBLE"})
+        self.assertGreater(response.summary.candidate_count, 0)
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_format_solution_table_includes_schedule_changes_and_warnings(self) -> None:
+        """The terminal solution view should include the key review sections."""
+        request = solver.make_demo_request()
+        response = solver.solve_schedule(request)
+
+        text = csv_runner.format_solution_table(response)
+
+        self.assertIn("Schedule", text)
+        self.assertIn("Changes", text)
+        self.assertIn("lesson_bob", text)
+        self.assertIn("moved", text)
+
+        warning_response = solver.SolverResponse(
+            status=response.status,
+            summary=response.summary,
+            schedule=response.schedule,
+            changes=response.changes,
+            warnings=["example warning"],
+        )
+        warning_text = csv_runner.format_solution_table(warning_response)
+        self.assertIn("Warnings", warning_text)
+        self.assertIn("example warning", warning_text)
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_print_solution_cli_prints_table_and_writes_json(self) -> None:
+        """--print-solution should print review rows while preserving JSON output."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "solution.json"
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                csv_runner.main(
+                    [
+                        "--input",
+                        "csv_demo_input",
+                        "--output",
+                        str(output_path),
+                        "--print-solution",
+                    ]
+                )
+
+            printed = stdout.getvalue()
+            self.assertIn("Schedule", printed)
+            self.assertIn("lesson_bob", printed)
+            self.assertTrue(output_path.exists())
+
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertIn(payload["status"], {"OPTIMAL", "FEASIBLE"})
+            self.assertIn("schedule", payload)
+
+    def test_init_template_creates_expected_csv_files_and_headers(self) -> None:
+        """The CSV template helper should create the complete folder contract."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template_dir = Path(temp_dir) / "input_template"
+            written = csv_runner.create_csv_template(template_dir)
+
+            self.assertEqual(
+                set(csv_runner.REQUIRED_FILES + csv_runner.OPTIONAL_FILES),
+                {path.name for path in written},
+            )
+            self.assertEqual(
+                "lesson_id,student_id,venue_id,duration_min,must_schedule,priority",
+                (template_dir / "lessons.csv").read_text(encoding="utf-8").splitlines()[0],
+            )
+            self.assertEqual(
+                "key,value",
+                (template_dir / "config.csv").read_text(encoding="utf-8").splitlines()[0],
+            )
+
+    def test_init_template_refuses_to_overwrite_without_force(self) -> None:
+        """Template creation should avoid clobbering user-edited CSV files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template_dir = Path(temp_dir) / "input_template"
+            csv_runner.create_csv_template(template_dir)
+
+            with self.assertRaises(csv_runner.CsvInputError):
+                csv_runner.create_csv_template(template_dir)
+
+            written = csv_runner.create_csv_template(template_dir, force=True)
+            self.assertTrue(written)
+
+    def test_validate_only_succeeds_for_demo_input(self) -> None:
+        """--validate-only should load and validate input without solving."""
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            csv_runner.main(["--input", "csv_demo_input", "--validate-only"])
+
+        self.assertIn("validation=ok", stdout.getvalue())
+
+    def test_validate_only_reports_validation_failures(self) -> None:
+        """--validate-only should report solver-side validation errors."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            template_dir = Path(temp_dir) / "bad_input"
+            csv_runner.create_csv_template(template_dir)
+            csv_runner.write_csv(
+                template_dir / "lessons.csv",
+                [
+                    {
+                        "lesson_id": "lesson_bad",
+                        "student_id": "missing_student",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                    }
+                ],
+            )
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                with self.assertRaises(SystemExit):
+                    csv_runner.main(["--input", str(template_dir), "--validate-only"])
+
+            printed = stdout.getvalue()
+            self.assertIn("validation=failed", printed)
+            self.assertIn("missing student_id", printed)
 
 
 if __name__ == "__main__":

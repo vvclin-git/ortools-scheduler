@@ -22,6 +22,26 @@ Run:
 uv run python run_solver_from_csv.py --input csv_input --output solution.json --dump-request request_debug.json --print-summary
 ```
 
+Print a compact terminal solution table:
+
+```bash
+uv run python run_solver_from_csv.py --input csv_input --output solution.json --print-summary --print-solution
+```
+
+Create a starter input folder:
+
+```bash
+uv run python run_solver_from_csv.py --init-template csv_input
+```
+
+Validate input without solving:
+
+```bash
+uv run python run_solver_from_csv.py --input csv_input --validate-only
+```
+
+Spreadsheet users can keep one sheet per CSV file and export each sheet as CSV.
+
 ## config.csv
 
 | column | meaning |

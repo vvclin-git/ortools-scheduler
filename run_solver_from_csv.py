@@ -43,6 +43,8 @@ from trainer_solver_mvp import (
     Venue,
     build_candidate_assignments,
     solve_schedule,
+    validate_fixed_bookings,
+    validate_request,
 )
 
 
@@ -61,6 +63,79 @@ OPTIONAL_FILES = [
     "absences.csv",
     "weights.csv",
 ]
+
+TEMPLATE_ROWS: Dict[str, List[Dict[str, str]]] = {
+    "config.csv": [
+        {"key": "mode", "value": "in_week_reschedule"},
+        {"key": "planning_start", "value": "2026-05-04T09:00:00"},
+        {"key": "planning_end", "value": "2026-05-10T22:00:00"},
+        {"key": "slot_size_min", "value": "30"},
+        {"key": "max_solve_seconds", "value": "5.0"},
+        {"key": "freeze_now", "value": "2026-05-06T14:00:00"},
+        {"key": "freeze_buffer_hours", "value": "4"},
+    ],
+    "students.csv": [
+        {"student_id": "stu_alice", "name": "Alice", "default_venue_id": "gym_a", "priority": "2"},
+    ],
+    "venues.csv": [
+        {"venue_id": "gym_a", "name": "Gym A"},
+    ],
+    "travel_times.csv": [
+        {"from_venue_id": "gym_a", "to_venue_id": "gym_a", "travel_min": "0"},
+    ],
+    "lessons.csv": [
+        {
+            "lesson_id": "lesson_alice",
+            "student_id": "stu_alice",
+            "venue_id": "gym_a",
+            "duration_min": "60",
+            "must_schedule": "TRUE",
+            "priority": "2",
+        },
+    ],
+    "preferences.csv": [
+        {
+            "student_id": "stu_alice",
+            "day": "Mon",
+            "start": "18:00",
+            "end": "21:00",
+            "level": "preferred",
+            "score": "100",
+        },
+    ],
+    "coach_availability.csv": [
+        {"day": "Mon", "start": "10:00", "end": "22:00", "score": "0"},
+    ],
+    "existing_bookings.csv": [
+        {
+            "booking_id": "book_alice",
+            "lesson_id": "lesson_alice",
+            "student_id": "stu_alice",
+            "venue_id": "gym_a",
+            "start_datetime": "2026-05-04T18:00:00",
+            "end_datetime": "2026-05-04T19:00:00",
+            "status": "confirmed",
+            "lock_level": "1",
+        },
+    ],
+    "absences.csv": [
+        {
+            "entity_type": "student",
+            "entity_id": "stu_alice",
+            "start_datetime": "2026-05-07T18:00:00",
+            "end_datetime": "2026-05-07T22:00:00",
+            "reason": "Example absence",
+        },
+    ],
+    "weights.csv": [
+        {"key": "lesson_priority", "value": "20"},
+        {"key": "keep_original_bonus", "value": "800"},
+        {"key": "move_confirmed_penalty", "value": "1000"},
+        {"key": "move_draft_penalty", "value": "200"},
+        {"key": "cancel_optional_penalty", "value": "3000"},
+        {"key": "cross_venue_pair_penalty_per_min", "value": "1"},
+    ],
+}
 
 
 class CsvInputError(ValueError):
@@ -342,6 +417,32 @@ def write_json(path: Path, payload: Any) -> None:
         file.write("\n")
 
 
+def write_csv(path: Path, rows: List[Dict[str, str]]) -> None:
+    """Write CSV rows using the dictionary keys as headers."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = list(rows[0].keys()) if rows else []
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def create_csv_template(output_dir: Path, force: bool = False) -> List[Path]:
+    """Create a user-editable CSV input template folder."""
+    files = REQUIRED_FILES + OPTIONAL_FILES
+    existing = [output_dir / name for name in files if (output_dir / name).exists()]
+    if existing and not force:
+        names = ", ".join(str(path) for path in existing)
+        raise CsvInputError(f"Refusing to overwrite existing template files: {names}")
+
+    written = []
+    for name in files:
+        path = output_dir / name
+        write_csv(path, TEMPLATE_ROWS[name])
+        written.append(path)
+    return written
+
+
 def build_debug_payload(request: SolverRequest) -> Dict[str, Any]:
     """Build a JSON-serializable debug payload for request and candidates."""
     candidates, warnings = build_candidate_assignments(request)
@@ -360,11 +461,115 @@ def build_debug_payload(request: SolverRequest) -> Dict[str, Any]:
     }
 
 
-def parse_args() -> argparse.Namespace:
+def format_table(headers: List[str], rows: List[List[Any]]) -> str:
+    """Format a compact ASCII table."""
+    values = [[str(value) for value in row] for row in rows]
+    widths = [
+        max(len(header), *(len(row[index]) for row in values)) if values else len(header)
+        for index, header in enumerate(headers)
+    ]
+
+    def format_row(row: List[Any]) -> str:
+        return " | ".join(str(value).ljust(widths[index]) for index, value in enumerate(row))
+
+    separator = "-+-".join("-" * width for width in widths)
+    lines = [format_row(headers), separator]
+    lines.extend(format_row(row) for row in values)
+    return "\n".join(lines)
+
+
+def format_solution_table(response: Any) -> str:
+    """Format a solver response for terminal review."""
+    lines = [
+        "Solution",
+        f"status={response.status}",
+        (
+            f"scheduled={response.summary.scheduled_lessons} "
+            f"unscheduled={response.summary.unscheduled_lessons} "
+            f"changed={response.summary.changed_lessons} "
+            f"candidates={getattr(response.summary, 'candidate_count', 0)}"
+        ),
+        "",
+        "Schedule",
+    ]
+
+    if response.schedule:
+        lines.append(
+            format_table(
+                ["lesson", "student", "venue", "start", "end", "preference", "changed"],
+                [
+                    [
+                        item.lesson_id,
+                        item.student_name,
+                        item.venue_name,
+                        item.start_datetime,
+                        item.end_datetime,
+                        item.preference_level,
+                        "yes" if item.is_changed else "no",
+                    ]
+                    for item in response.schedule
+                ],
+            )
+        )
+    else:
+        lines.append("(none)")
+
+    lines.extend(["", "Changes"])
+    if response.changes:
+        lines.append(
+            format_table(
+                ["lesson", "student", "type", "old_start", "new_start", "impact"],
+                [
+                    [
+                        item.lesson_id,
+                        item.student_name,
+                        item.change_type,
+                        item.old_start or "",
+                        item.new_start or "",
+                        item.impact_score,
+                    ]
+                    for item in response.changes
+                ],
+            )
+        )
+    else:
+        lines.append("(none)")
+
+    if response.warnings:
+        lines.extend(["", "Warnings"])
+        lines.extend(f"- {warning}" for warning in response.warnings)
+
+    return "\n".join(lines)
+
+
+def validate_solver_request(request: SolverRequest) -> List[str]:
+    """Run solver-side validation without solving."""
+    warnings = validate_request(request)
+    if warnings:
+        return warnings
+    return validate_fixed_bookings(request)
+
+
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(description="Run trainer scheduler solver from CSV files.")
-    parser.add_argument("--input", required=True, help="Folder containing CSV input files.")
+    parser.add_argument("--input", default=None, help="Folder containing CSV input files.")
     parser.add_argument("--output", default="solution.json", help="Output solution JSON path.")
+    parser.add_argument(
+        "--init-template",
+        default=None,
+        help="Create a CSV input template folder and exit.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow --init-template to overwrite existing template CSV files.",
+    )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Load and validate CSV input without solving.",
+    )
     parser.add_argument(
         "--dump-request",
         default=None,
@@ -375,16 +580,42 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print a short summary after solving.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--print-solution",
+        action="store_true",
+        help="Print a compact schedule and changes table after solving.",
+    )
+    return parser.parse_args(argv)
 
 
-def main() -> None:
+def main(argv: Optional[List[str]] = None) -> None:
     """CLI entry point."""
-    args = parse_args()
+    args = parse_args(argv)
+
+    if args.init_template:
+        written = create_csv_template(Path(args.init_template), force=args.force)
+        print(f"created_template={args.init_template}")
+        print(f"files={len(written)}")
+        print("Edit these CSV files directly, or use Excel/Google Sheets and export each sheet as CSV.")
+        return
+
+    if not args.input:
+        raise CsvInputError("Missing --input. Use --input CSV_FOLDER or --init-template TEMPLATE_FOLDER.")
+
     input_dir = Path(args.input)
     output_path = Path(args.output)
 
     request = load_solver_request(input_dir)
+
+    if args.validate_only:
+        warnings = validate_solver_request(request)
+        if warnings:
+            print("validation=failed")
+            for warning in warnings:
+                print(f"warning={warning}")
+            raise SystemExit(1)
+        print("validation=ok")
+        return
 
     if args.dump_request:
         write_json(Path(args.dump_request), build_debug_payload(request))
@@ -398,6 +629,9 @@ def main() -> None:
         print(f"unscheduled={response.summary.unscheduled_lessons}")
         print(f"changed={response.summary.changed_lessons}")
         print(f"output={output_path}")
+
+    if args.print_solution:
+        print(format_solution_table(response))
 
 
 if __name__ == "__main__":
