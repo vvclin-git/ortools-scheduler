@@ -1,0 +1,5 @@
+booking_id,lesson_id,student_id,venue_id,start_datetime,end_datetime,status,lock_level
+book_alice,lesson_alice,stu_alice,gym_a,2026-05-04T18:00:00,2026-05-04T19:00:00,completed,3
+book_bob,lesson_bob,stu_bob,gym_b,2026-05-07T19:00:00,2026-05-07T20:00:00,confirmed,1
+book_carol,lesson_carol,stu_carol,gym_b,2026-05-07T20:30:00,2026-05-07T21:30:00,confirmed,1
+book_david,lesson_david,stu_david,gym_a,2026-05-08T18:00:00,2026-05-08T19:00:00,confirmed,1
