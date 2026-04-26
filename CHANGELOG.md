@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   existing schema.
 - Added `--validate-only` to load and validate CSV input without solving.
 - Added `candidate_count` to solver summaries for scale monitoring.
+- Added `shared_session_id` on lessons so couples or other student groups can
+  share the same scheduled lesson slot.
 
 ### Changed
 
@@ -23,6 +25,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added explicit optional-lesson unscheduled decision variables so
   `cancel_optional_penalty` affects objective behavior.
 - Documented the CSV template, validation, and terminal quick-review workflows.
+- Expanded the input data format documentation into a test-data preparation
+  guide with file order, column definitions, examples, scenario ideas, and
+  validation checks.
+- Clarified that student and venue display names support Traditional Chinese
+  when CSV files are saved as UTF-8.
 
 ### Fixed
 

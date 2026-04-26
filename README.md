@@ -97,8 +97,13 @@ Optional files:
 - `absences.csv`
 - `weights.csv`
 
-See [csv_input_schema.md](csv_input_schema.md) for the full CSV contract,
-supported values, and examples.
+See [csv_input_schema.md](csv_input_schema.md) for the full test-data
+preparation guide, including file order, required columns, valid values,
+examples, scenario ideas, and validation checks.
+
+For couple or shared lessons, give each student's lesson row the same
+`shared_session_id` in `lessons.csv`. Blank values keep the normal one-student
+lesson behavior.
 
 Create a starter CSV input folder:
 
@@ -115,6 +120,10 @@ uv run python run_solver_from_csv.py --input my_schedule_input --validate-only
 Excel or Google Sheets users can edit the generated CSV files directly, or keep
 one sheet per CSV file and export each sheet back to CSV before running the
 solver.
+
+Use stable ASCII IDs such as `stu_alice` or `gym_a` for references. Display
+names for students and venues may be Traditional Chinese, as long as CSV files
+are saved as UTF-8.
 
 ## Programmatic Usage
 

@@ -56,6 +56,7 @@ class LessonRequest:
     duration_min: int = 60
     must_schedule: bool = True
     priority: int = 1
+    shared_session_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -195,6 +196,7 @@ class CandidateAssignment:
     lesson_id: str
     student_id: str
     venue_id: str
+    shared_session_id: Optional[str]
     start: datetime
     end: datetime
     preference_level: str
@@ -329,6 +331,7 @@ def fixed_booking_candidate(
         lesson_id=lesson.lesson_id,
         student_id=lesson.student_id,
         venue_id=lesson.venue_id,
+        shared_session_id=lesson.shared_session_id,
         start=start,
         end=end,
         preference_level=pref[0],
@@ -489,6 +492,7 @@ def validate_fixed_bookings(req: SolverRequest) -> List[str]:
             lesson_a.lesson_id,
             lesson_a.student_id,
             lesson_a.venue_id,
+            lesson_a.shared_session_id,
             start_a,
             end_a,
             "locked",
@@ -504,6 +508,7 @@ def validate_fixed_bookings(req: SolverRequest) -> List[str]:
                 lesson_b.lesson_id,
                 lesson_b.student_id,
                 lesson_b.venue_id,
+                lesson_b.shared_session_id,
                 start_b,
                 end_b,
                 "locked",
@@ -512,6 +517,12 @@ def validate_fixed_bookings(req: SolverRequest) -> List[str]:
                 True,
                 True,
             )
+            if candidates_have_same_shared_session_id(cand_a, cand_b) and not candidates_share_session(cand_a, cand_b):
+                warnings.append(
+                    f"Fixed bookings {booking_a.booking_id} and {booking_b.booking_id} share session "
+                    f"{cand_a.shared_session_id} but do not have the same time and venue"
+                )
+                continue
             if not candidates_can_coexist(cand_a, cand_b, travel_lookup):
                 warnings.append(
                     f"Fixed bookings {booking_a.booking_id} and {booking_b.booking_id} overlap or violate travel time"
@@ -589,6 +600,7 @@ def build_candidate_assignments(req: SolverRequest) -> Tuple[List[CandidateAssig
                     lesson_id=lesson.lesson_id,
                     student_id=lesson.student_id,
                     venue_id=lesson.venue_id,
+                    shared_session_id=lesson.shared_session_id,
                     start=start,
                     end=end,
                     preference_level=pref[0],
@@ -609,11 +621,32 @@ def candidates_can_coexist(
     b: CandidateAssignment,
     travel_lookup: Dict[Tuple[str, str], int],
 ) -> bool:
+    if candidates_share_session(a, b):
+        return True
     a_to_b = get_travel_min(travel_lookup, a.venue_id, b.venue_id)
     b_to_a = get_travel_min(travel_lookup, b.venue_id, a.venue_id)
     a_before_b = a.end + timedelta(minutes=a_to_b) <= b.start
     b_before_a = b.end + timedelta(minutes=b_to_a) <= a.start
     return a_before_b or b_before_a
+
+
+def candidates_share_session(a: CandidateAssignment, b: CandidateAssignment) -> bool:
+    if not a.shared_session_id or not b.shared_session_id:
+        return False
+    return (
+        a.shared_session_id == b.shared_session_id
+        and a.venue_id == b.venue_id
+        and a.start == b.start
+        and a.end == b.end
+    )
+
+
+def candidates_have_same_shared_session_id(a: CandidateAssignment, b: CandidateAssignment) -> bool:
+    return (
+        bool(a.shared_session_id)
+        and bool(b.shared_session_id)
+        and a.shared_session_id == b.shared_session_id
+    )
 
 
 def solve_schedule(req: SolverRequest) -> SolverResponse:
@@ -689,6 +722,10 @@ def solve_schedule(req: SolverRequest) -> SolverResponse:
         for j in range(i + 1, len(candidates)):
             b = candidates[j]
             if a.lesson_id == b.lesson_id:
+                continue
+            if candidates_have_same_shared_session_id(a, b):
+                if not candidates_share_session(a, b):
+                    model.Add(x[a.candidate_id] + x[b.candidate_id] <= 1)
                 continue
             if not candidates_can_coexist(a, b, travel_lookup):
                 model.Add(x[a.candidate_id] + x[b.candidate_id] <= 1)

@@ -75,10 +75,10 @@ TEMPLATE_ROWS: Dict[str, List[Dict[str, str]]] = {
         {"key": "freeze_buffer_hours", "value": "4"},
     ],
     "students.csv": [
-        {"student_id": "stu_alice", "name": "Alice", "default_venue_id": "gym_a", "priority": "2"},
+        {"student_id": "stu_alice", "name": "王小明", "default_venue_id": "gym_a", "priority": "2"},
     ],
     "venues.csv": [
-        {"venue_id": "gym_a", "name": "Gym A"},
+        {"venue_id": "gym_a", "name": "台北教室A"},
     ],
     "travel_times.csv": [
         {"from_venue_id": "gym_a", "to_venue_id": "gym_a", "travel_min": "0"},
@@ -91,6 +91,7 @@ TEMPLATE_ROWS: Dict[str, List[Dict[str, str]]] = {
             "duration_min": "60",
             "must_schedule": "TRUE",
             "priority": "2",
+            "shared_session_id": "",
         },
     ],
     "preferences.csv": [
@@ -318,6 +319,7 @@ def load_lessons(input_dir: Path) -> List[LessonRequest]:
             duration_min=parse_int(row.get("duration_min", ""), 60),
             must_schedule=parse_bool(row.get("must_schedule", ""), True),
             priority=parse_int(row.get("priority", ""), 1),
+            shared_session_id=row.get("shared_session_id", "") or None,
         )
         for row in rows
     ]

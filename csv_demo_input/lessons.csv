@@ -1,5 +1,5 @@
-lesson_id,student_id,venue_id,duration_min,must_schedule,priority
-lesson_alice,stu_alice,gym_a,60,TRUE,2
-lesson_bob,stu_bob,gym_b,60,TRUE,1
-lesson_carol,stu_carol,gym_b,60,TRUE,1
-lesson_david,stu_david,gym_a,60,TRUE,1
+lesson_id,student_id,venue_id,duration_min,must_schedule,priority,shared_session_id
+lesson_alice,stu_alice,gym_a,60,TRUE,2,
+lesson_bob,stu_bob,gym_b,60,TRUE,1,
+lesson_carol,stu_carol,gym_b,60,TRUE,1,
+lesson_david,stu_david,gym_a,60,TRUE,1,

@@ -181,6 +181,56 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertEqual("2026-05-04T21:00", by_lesson["lesson_b"].start_datetime)
 
     @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_shared_session_students_can_take_same_lesson(self) -> None:
+        """Lessons with the same shared_session_id may use the same coach slot."""
+        request = solver.SolverRequest(
+            config=solver.SolverConfig(
+                mode=solver.SolverMode.WEEKLY_PLANNING,
+                planning_start="2026-05-04T17:00:00",
+                planning_end="2026-05-04T20:00:00",
+                slot_size_min=60,
+                max_solve_seconds=5.0,
+            ),
+            students=[
+                solver.Student("stu_a", "Student A", "gym_a"),
+                solver.Student("stu_b", "Student B", "gym_a"),
+            ],
+            venues=[solver.Venue("gym_a", "Gym A")],
+            travel_times=[],
+            lessons=[
+                solver.LessonRequest(
+                    "lesson_a",
+                    "stu_a",
+                    "gym_a",
+                    duration_min=60,
+                    shared_session_id="couple_1",
+                ),
+                solver.LessonRequest(
+                    "lesson_b",
+                    "stu_b",
+                    "gym_a",
+                    duration_min=60,
+                    shared_session_id="couple_1",
+                ),
+            ],
+            preferences=[
+                solver.StudentPreference("stu_a", "Mon", "18:00", "19:00", "preferred", 100),
+                solver.StudentPreference("stu_b", "Mon", "18:00", "19:00", "preferred", 100),
+            ],
+            coach_availability=[solver.CoachAvailability("Mon", "18:00", "19:00")],
+        )
+
+        response = solver.solve_schedule(request)
+
+        self.assertIn(response.status, {"OPTIMAL", "FEASIBLE"})
+        self.assertEqual(2, response.summary.scheduled_lessons)
+        by_lesson = {item.lesson_id: item for item in response.schedule}
+        self.assertEqual("2026-05-04T18:00", by_lesson["lesson_a"].start_datetime)
+        self.assertEqual("2026-05-04T18:00", by_lesson["lesson_b"].start_datetime)
+        self.assertEqual("2026-05-04T19:00", by_lesson["lesson_a"].end_datetime)
+        self.assertEqual("2026-05-04T19:00", by_lesson["lesson_b"].end_datetime)
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
     def test_in_week_freeze_buffer_keeps_near_future_booking_fixed(self) -> None:
         """A confirmed lesson before freeze_before should be fixed even if it has alternatives."""
         request = solver.make_demo_request()
@@ -259,6 +309,54 @@ class TrainerSolverMvpTests(unittest.TestCase):
 
         self.assertEqual("INFEASIBLE_INPUT", response.status)
         self.assertIn("overlap", " ".join(response.warnings))
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_shared_fixed_bookings_must_have_same_time_and_venue(self) -> None:
+        """Fixed shared-session bookings should be rejected when they do not match exactly."""
+        request = solver.make_demo_request()
+        request = copy.deepcopy(request)
+        request.absences[:] = []
+        request.lessons[1] = solver.LessonRequest(
+            "lesson_bob",
+            "stu_bob",
+            "gym_b",
+            duration_min=60,
+            shared_session_id="couple_1",
+        )
+        request.lessons[2] = solver.LessonRequest(
+            "lesson_carol",
+            "stu_carol",
+            "gym_b",
+            duration_min=60,
+            shared_session_id="couple_1",
+        )
+        request.existing_bookings[:] = [
+            solver.ExistingBooking(
+                "book_bob",
+                "lesson_bob",
+                "stu_bob",
+                "gym_b",
+                "2026-05-07T19:00:00",
+                "2026-05-07T20:00:00",
+                status="locked",
+                lock_level=3,
+            ),
+            solver.ExistingBooking(
+                "book_carol",
+                "lesson_carol",
+                "stu_carol",
+                "gym_b",
+                "2026-05-07T20:30:00",
+                "2026-05-07T21:30:00",
+                status="locked",
+                lock_level=3,
+            ),
+        ]
+
+        response = solver.solve_schedule(request)
+
+        self.assertEqual("INFEASIBLE_INPUT", response.status)
+        self.assertIn("share session", " ".join(response.warnings))
 
     @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
     def test_fixed_booking_with_absence_returns_infeasible_input(self) -> None:
@@ -446,7 +544,7 @@ class TrainerSolverMvpTests(unittest.TestCase):
                 {path.name for path in written},
             )
             self.assertEqual(
-                "lesson_id,student_id,venue_id,duration_min,must_schedule,priority",
+                "lesson_id,student_id,venue_id,duration_min,must_schedule,priority,shared_session_id",
                 (template_dir / "lessons.csv").read_text(encoding="utf-8").splitlines()[0],
             )
             self.assertEqual(
@@ -490,6 +588,7 @@ class TrainerSolverMvpTests(unittest.TestCase):
                         "duration_min": "60",
                         "must_schedule": "TRUE",
                         "priority": "1",
+                        "shared_session_id": "",
                     }
                 ],
             )

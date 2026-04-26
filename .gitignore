@@ -18,3 +18,6 @@ csv_demo_input.zip
 
 # Local progress notes
 trainer_scheduler_solver_progress_summary.md
+
+# Local Codex/test scratch directories
+.codex_tmp/
