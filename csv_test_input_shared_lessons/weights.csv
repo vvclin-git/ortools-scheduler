@@ -1,0 +1,7 @@
+key,value
+lesson_priority,20
+keep_original_bonus,800
+move_confirmed_penalty,1000
+move_draft_penalty,200
+cancel_optional_penalty,3000
+cross_venue_pair_penalty_per_min,1

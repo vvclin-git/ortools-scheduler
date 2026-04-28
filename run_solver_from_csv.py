@@ -24,8 +24,9 @@ import argparse
 import csv
 import json
 from dataclasses import asdict
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from trainer_solver_mvp import (
     Absence,
@@ -42,6 +43,10 @@ from trainer_solver_mvp import (
     TravelTime,
     Venue,
     build_candidate_assignments,
+    day_name,
+    get_coach_availability_score,
+    parse_dt,
+    parse_time_min,
     solve_schedule,
     validate_fixed_bookings,
     validate_request,
@@ -419,6 +424,13 @@ def write_json(path: Path, payload: Any) -> None:
         file.write("\n")
 
 
+def write_text(path: Path, text: str) -> None:
+    """Write a UTF-8 text artifact."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as file:
+        file.write(text)
+
+
 def write_csv(path: Path, rows: List[Dict[str, str]]) -> None:
     """Write CSV rows using the dictionary keys as headers."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -544,6 +556,172 @@ def format_solution_table(response: Any) -> str:
     return "\n".join(lines)
 
 
+def ics_escape(value: Any) -> str:
+    """Escape text for an iCalendar property value."""
+    text = str(value)
+    return (
+        text.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+    )
+
+
+def fold_ics_line(line: str) -> List[str]:
+    """Fold a long iCalendar line using a conservative character limit."""
+    if len(line) <= 75:
+        return [line]
+    out = [line[:75]]
+    current = line[75:]
+    while current:
+        out.append(" " + current[:74])
+        current = current[74:]
+    return out
+
+
+def ics_dt(value: datetime) -> str:
+    """Format a local floating iCalendar datetime."""
+    return value.strftime("%Y%m%dT%H%M%S")
+
+
+def availability_window_datetimes(day: datetime, window: CoachAvailability) -> Tuple[datetime, datetime]:
+    """Build concrete start/end datetimes for a weekly availability row."""
+    start_min = parse_time_min(window.start)
+    end_min = parse_time_min(window.end)
+    start = day.replace(hour=start_min // 60, minute=start_min % 60, second=0, microsecond=0)
+    end = day.replace(hour=end_min // 60, minute=end_min % 60, second=0, microsecond=0)
+    return start, end
+
+
+def iter_availability_events(request: SolverRequest) -> Iterable[Tuple[datetime, datetime, CoachAvailability]]:
+    """Yield concrete availability windows inside the planning horizon."""
+    horizon_start = parse_dt(request.config.planning_start)
+    horizon_end = parse_dt(request.config.planning_end)
+    day = horizon_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    last_day = horizon_end.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    while day <= last_day:
+        for window in request.coach_availability:
+            if window.day != day_name(day):
+                continue
+            start, end = availability_window_datetimes(day, window)
+            start = max(start, horizon_start)
+            end = min(end, horizon_end)
+            if start < end:
+                yield start, end, window
+        day += timedelta(days=1)
+
+
+def add_ics_event(lines: List[str], properties: List[Tuple[str, Any]]) -> None:
+    """Append a VEVENT with escaped/folded properties."""
+    lines.append("BEGIN:VEVENT")
+    for key, value in properties:
+        for folded in fold_ics_line(f"{key}:{ics_escape(value)}"):
+            lines.append(folded)
+    lines.append("END:VEVENT")
+
+
+def build_lesson_event_groups(response: Any, request: SolverRequest) -> List[List[Any]]:
+    """Group shared-session schedule rows for a compact calendar view."""
+    lesson_by_id = {lesson.lesson_id: lesson for lesson in request.lessons}
+    groups: Dict[Tuple[str, str, str, str, str], List[Any]] = {}
+
+    for item in response.schedule:
+        lesson = lesson_by_id.get(item.lesson_id)
+        shared_session_id = lesson.shared_session_id if lesson is not None else None
+        if shared_session_id:
+            key = (
+                "shared",
+                shared_session_id,
+                item.start_datetime,
+                item.end_datetime,
+                item.venue_id,
+            )
+        else:
+            key = ("lesson", item.lesson_id, item.start_datetime, item.end_datetime, item.venue_id)
+        groups.setdefault(key, []).append(item)
+
+    return [
+        sorted(group, key=lambda item: item.student_name)
+        for _, group in sorted(groups.items(), key=lambda pair: (pair[1][0].start_datetime, pair[1][0].lesson_id))
+    ]
+
+
+def lesson_group_outside_availability(group: List[Any], request: SolverRequest) -> bool:
+    """Return whether a lesson group is outside coach availability."""
+    first = group[0]
+    start = parse_dt(first.start_datetime)
+    end = parse_dt(first.end_datetime)
+    return get_coach_availability_score(start, end, request.coach_availability) is None
+
+
+def schedule_to_ics(response: Any, request: SolverRequest, calendar_name: str = "Trainer Schedule") -> str:
+    """Convert a solver response to an iCalendar string."""
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//ortools-scheduler//trainer-schedule//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        f"X-WR-CALNAME:{ics_escape(calendar_name)}",
+    ]
+
+    for start, end, window in iter_availability_events(request):
+        add_ics_event(
+            lines,
+            [
+                ("UID", f"availability-{ics_dt(start)}-{ics_dt(end)}@ortools-scheduler"),
+                ("DTSTAMP", ics_dt(datetime.now())),
+                ("DTSTART", ics_dt(start)),
+                ("DTEND", ics_dt(end)),
+                ("SUMMARY", f"Available - {window.start}-{window.end}"),
+                ("TRANSP", "TRANSPARENT"),
+                ("DESCRIPTION", f"Trainer availability window: {window.day} {window.start}-{window.end}"),
+            ],
+        )
+
+    for group in build_lesson_event_groups(response, request):
+        first = group[0]
+        start = parse_dt(first.start_datetime)
+        end = parse_dt(first.end_datetime)
+        outside_availability = lesson_group_outside_availability(group, request)
+        student_names = " / ".join(item.student_name for item in group)
+        summary = f"{student_names} - {first.venue_name}"
+        if outside_availability:
+            summary = f"[OUTSIDE AVAILABILITY] {summary}"
+        lesson_ids = ", ".join(item.lesson_id for item in group)
+        student_ids = ", ".join(item.student_id for item in group)
+        preference_levels = ", ".join(item.preference_level for item in group)
+        changed = "yes" if any(item.is_changed for item in group) else "no"
+        description_parts = [
+            f"Lesson IDs: {lesson_ids}",
+            f"Student IDs: {student_ids}",
+            f"Preference levels: {preference_levels}",
+            f"Changed: {changed}",
+        ]
+        if outside_availability:
+            description_parts.append("Warning: this lesson is outside trainer availability.")
+
+        add_ics_event(
+            lines,
+            [
+                ("UID", f"lesson-{'-'.join(item.lesson_id for item in group)}-{ics_dt(start)}-{ics_dt(end)}@ortools-scheduler"),
+                ("DTSTAMP", ics_dt(datetime.now())),
+                ("DTSTART", ics_dt(start)),
+                ("DTEND", ics_dt(end)),
+                ("SUMMARY", summary),
+                ("LOCATION", first.venue_name),
+                ("DESCRIPTION", "\n".join(description_parts)),
+            ],
+        )
+
+    lines.append("END:VCALENDAR")
+    folded_lines = []
+    for line in lines:
+        folded_lines.extend(fold_ics_line(line))
+    return "\r\n".join(folded_lines) + "\r\n"
+
+
 def validate_solver_request(request: SolverRequest) -> List[str]:
     """Run solver-side validation without solving."""
     warnings = validate_request(request)
@@ -557,6 +735,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run trainer scheduler solver from CSV files.")
     parser.add_argument("--input", default=None, help="Folder containing CSV input files.")
     parser.add_argument("--output", default="solution.json", help="Output solution JSON path.")
+    parser.add_argument(
+        "--output-ics",
+        default=None,
+        help="Optional path to write an iCalendar (.ics) visualization of the solved schedule.",
+    )
     parser.add_argument(
         "--init-template",
         default=None,
@@ -624,6 +807,8 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     response = solve_schedule(request)
     write_json(output_path, asdict(response))
+    if args.output_ics:
+        write_text(Path(args.output_ics), schedule_to_ics(response, request))
 
     if args.print_summary:
         print(f"status={response.status}")
@@ -631,6 +816,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         print(f"unscheduled={response.summary.unscheduled_lessons}")
         print(f"changed={response.summary.changed_lessons}")
         print(f"output={output_path}")
+        if args.output_ics:
+            print(f"output_ics={args.output_ics}")
 
     if args.print_solution:
         print(format_solution_table(response))

@@ -26,6 +26,16 @@ Run the solver and print a quick terminal review:
 uv run python run_solver_from_csv.py --input my_schedule_input --output solution.json --print-summary --print-solution
 ```
 
+Run the solver and write an iCalendar file for visual review:
+
+```bash
+uv run python run_solver_from_csv.py --input my_schedule_input --output solution.json --output-ics schedule.ics --print-summary
+```
+
+The ICS file includes transparent coach availability windows and lesson events.
+Shared lessons appear as one event when they share the same time and venue.
+Lessons outside coach availability are prefixed with `[OUTSIDE AVAILABILITY]`.
+
 For deeper debugging, also dump the normalized request and generated candidates:
 
 ```bash

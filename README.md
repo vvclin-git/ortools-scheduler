@@ -77,6 +77,16 @@ For terminal review, print the selected schedule and changes directly:
 uv run python run_solver_from_csv.py --input csv_demo_input --output solution.json --print-summary --print-solution
 ```
 
+For calendar review, also write an iCalendar file:
+
+```bash
+uv run python run_solver_from_csv.py --input csv_demo_input --output solution.json --output-ics schedule.ics --print-summary
+```
+
+The ICS export includes lesson events and transparent trainer-availability
+events. Shared lessons are grouped into one event, and any lesson outside coach
+availability is prefixed with `[OUTSIDE AVAILABILITY]`.
+
 ## CSV Input
 
 CSV input is stored as one folder with required and optional files.

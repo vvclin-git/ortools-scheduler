@@ -1,0 +1,6 @@
+lesson_id,student_id,venue_id,duration_min,must_schedule,priority,shared_session_id
+lesson_anna,stu_anna,jianguo,90,TRUE,1,couple_anna_brian
+lesson_brian,stu_brian,jianguo,90,TRUE,1,couple_anna_brian
+lesson_cindy,stu_cindy,fengshan,60,TRUE,1,
+lesson_david,stu_david,fuhua,60,TRUE,1,
+lesson_emily,stu_emily,fengshan,60,TRUE,1,

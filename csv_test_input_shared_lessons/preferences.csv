@@ -1,0 +1,9 @@
+student_id,day,start,end,level,score
+stu_anna,Mon,10:00,12:00,preferred,100
+stu_brian,Mon,10:00,12:00,preferred,100
+stu_cindy,Mon,12:00,15:00,preferred,100
+stu_cindy,Tue,10:00,13:00,acceptable,60
+stu_david,Tue,10:00,14:00,preferred,100
+stu_david,Wed,14:00,18:00,acceptable,60
+stu_emily,Wed,10:00,13:00,preferred,100
+stu_emily,Tue,15:00,18:00,acceptable,60

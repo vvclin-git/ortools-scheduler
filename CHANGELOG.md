@@ -16,6 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added `candidate_count` to solver summaries for scale monitoring.
 - Added `shared_session_id` on lessons so couples or other student groups can
   share the same scheduled lesson slot.
+- Added optional `--output-ics` calendar export with lesson events, grouped
+  shared lessons, transparent coach availability windows, and out-of-window
+  lesson warnings.
 
 ### Changed
 

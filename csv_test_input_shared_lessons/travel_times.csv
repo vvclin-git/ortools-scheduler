@@ -1,0 +1,10 @@
+from_venue_id,to_venue_id,travel_min
+jianguo,jianguo,0
+fengshan,fengshan,0
+fuhua,fuhua,0
+jianguo,fengshan,15
+fengshan,jianguo,15
+jianguo,fuhua,20
+fuhua,jianguo,20
+fengshan,fuhua,35
+fuhua,fengshan,35

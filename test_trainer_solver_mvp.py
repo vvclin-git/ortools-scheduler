@@ -506,6 +506,185 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("Warnings", warning_text)
         self.assertIn("example warning", warning_text)
 
+    def test_schedule_to_ics_exports_single_lesson_event(self) -> None:
+        """A regular scheduled lesson should export as one calendar event."""
+        request = solver.SolverRequest(
+            config=solver.SolverConfig(
+                mode=solver.SolverMode.WEEKLY_PLANNING,
+                planning_start="2026-05-04T10:00:00",
+                planning_end="2026-05-04T20:00:00",
+            ),
+            students=[solver.Student("stu_a", "Anna", "gym_a")],
+            venues=[solver.Venue("gym_a", "Gym A")],
+            travel_times=[],
+            lessons=[solver.LessonRequest("lesson_a", "stu_a", "gym_a")],
+            preferences=[],
+            coach_availability=[solver.CoachAvailability("Mon", "10:00", "20:00")],
+        )
+        response = solver.SolverResponse(
+            status="OPTIMAL",
+            summary=solver.SolverSummary(1, 0, 0, 0, 0, 10, 1),
+            schedule=[
+                solver.ScheduledLesson(
+                    "lesson_a",
+                    "stu_a",
+                    "Anna",
+                    "gym_a",
+                    "Gym A",
+                    "2026-05-04T10:00",
+                    "2026-05-04T11:00",
+                    "preferred",
+                    100,
+                    False,
+                )
+            ],
+            changes=[],
+            warnings=[],
+        )
+
+        text = csv_runner.schedule_to_ics(response, request)
+
+        self.assertIn("BEGIN:VCALENDAR", text)
+        self.assertEqual(2, text.count("BEGIN:VEVENT"))
+        self.assertIn("SUMMARY:Anna - Gym A", text)
+        self.assertIn("DTSTART:20260504T100000", text)
+        self.assertIn("LOCATION:Gym A", text)
+
+    def test_schedule_to_ics_groups_shared_lessons(self) -> None:
+        """Shared-session rows at the same time and venue should export as one event."""
+        request = solver.SolverRequest(
+            config=solver.SolverConfig(
+                mode=solver.SolverMode.WEEKLY_PLANNING,
+                planning_start="2026-05-04T10:00:00",
+                planning_end="2026-05-04T20:00:00",
+            ),
+            students=[
+                solver.Student("stu_a", "Anna", "gym_a"),
+                solver.Student("stu_b", "Brian", "gym_a"),
+            ],
+            venues=[solver.Venue("gym_a", "Gym A")],
+            travel_times=[],
+            lessons=[
+                solver.LessonRequest("lesson_a", "stu_a", "gym_a", shared_session_id="couple_1"),
+                solver.LessonRequest("lesson_b", "stu_b", "gym_a", shared_session_id="couple_1"),
+            ],
+            preferences=[],
+            coach_availability=[solver.CoachAvailability("Mon", "10:00", "20:00")],
+        )
+        response = solver.SolverResponse(
+            status="OPTIMAL",
+            summary=solver.SolverSummary(2, 0, 0, 0, 0, 20, 2),
+            schedule=[
+                solver.ScheduledLesson(
+                    "lesson_a",
+                    "stu_a",
+                    "Anna",
+                    "gym_a",
+                    "Gym A",
+                    "2026-05-04T10:00",
+                    "2026-05-04T11:30",
+                    "preferred",
+                    100,
+                    False,
+                ),
+                solver.ScheduledLesson(
+                    "lesson_b",
+                    "stu_b",
+                    "Brian",
+                    "gym_a",
+                    "Gym A",
+                    "2026-05-04T10:00",
+                    "2026-05-04T11:30",
+                    "preferred",
+                    100,
+                    False,
+                ),
+            ],
+            changes=[],
+            warnings=[],
+        )
+
+        text = csv_runner.schedule_to_ics(response, request)
+
+        self.assertEqual(2, text.count("BEGIN:VEVENT"))
+        self.assertIn("SUMMARY:Anna / Brian - Gym A", text)
+        self.assertIn("Lesson IDs: lesson_a\\, lesson_b", text)
+
+    def test_schedule_to_ics_exports_availability_windows(self) -> None:
+        """Trainer availability should appear as transparent events across the horizon."""
+        request = solver.SolverRequest(
+            config=solver.SolverConfig(
+                mode=solver.SolverMode.WEEKLY_PLANNING,
+                planning_start="2026-05-04T10:00:00",
+                planning_end="2026-05-06T20:00:00",
+            ),
+            students=[],
+            venues=[],
+            travel_times=[],
+            lessons=[],
+            preferences=[],
+            coach_availability=[
+                solver.CoachAvailability("Mon", "10:00", "20:00"),
+                solver.CoachAvailability("Tue", "10:00", "20:00"),
+                solver.CoachAvailability("Wed", "10:00", "20:00"),
+            ],
+        )
+        response = solver.SolverResponse(
+            status="OPTIMAL",
+            summary=solver.SolverSummary(0, 0, 0, 0, 0, 0, 0),
+            schedule=[],
+            changes=[],
+            warnings=[],
+        )
+
+        text = csv_runner.schedule_to_ics(response, request)
+
+        self.assertEqual(3, text.count("BEGIN:VEVENT"))
+        self.assertEqual(3, text.count("SUMMARY:Available - 10:00-20:00"))
+        self.assertEqual(3, text.count("TRANSP:TRANSPARENT"))
+
+    def test_schedule_to_ics_flags_lesson_outside_availability(self) -> None:
+        """Out-of-window lessons should be visibly flagged in the event title."""
+        request = solver.SolverRequest(
+            config=solver.SolverConfig(
+                mode=solver.SolverMode.WEEKLY_PLANNING,
+                planning_start="2026-05-04T10:00:00",
+                planning_end="2026-05-04T20:00:00",
+            ),
+            students=[solver.Student("stu_a", "Anna", "gym_a")],
+            venues=[solver.Venue("gym_a", "Gym A")],
+            travel_times=[],
+            lessons=[solver.LessonRequest("lesson_a", "stu_a", "gym_a")],
+            preferences=[],
+            coach_availability=[solver.CoachAvailability("Mon", "10:00", "12:00")],
+        )
+        response = solver.SolverResponse(
+            status="OPTIMAL",
+            summary=solver.SolverSummary(1, 0, 0, 0, 0, 10, 1),
+            schedule=[
+                solver.ScheduledLesson(
+                    "lesson_a",
+                    "stu_a",
+                    "Anna",
+                    "gym_a",
+                    "Gym A",
+                    "2026-05-04T13:00",
+                    "2026-05-04T14:00",
+                    "preferred",
+                    100,
+                    False,
+                )
+            ],
+            changes=[],
+            warnings=[],
+        )
+
+        text = csv_runner.schedule_to_ics(response, request)
+        unfolded = text.replace("\r\n ", "")
+
+        self.assertIn("SUMMARY:[OUTSIDE AVAILABILITY] Anna - Gym A", text)
+        self.assertIn("Warning: this lesson is outside trainer availability.", unfolded)
+
     @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
     def test_print_solution_cli_prints_table_and_writes_json(self) -> None:
         """--print-solution should print review rows while preserving JSON output."""
@@ -532,6 +711,31 @@ class TrainerSolverMvpTests(unittest.TestCase):
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertIn(payload["status"], {"OPTIMAL", "FEASIBLE"})
             self.assertIn("schedule", payload)
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_output_ics_cli_writes_calendar_file(self) -> None:
+        """--output-ics should write a calendar while preserving JSON output."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "solution.json"
+            ics_path = Path(temp_dir) / "schedule.ics"
+
+            csv_runner.main(
+                [
+                    "--input",
+                    "csv_demo_input",
+                    "--output",
+                    str(output_path),
+                    "--output-ics",
+                    str(ics_path),
+                ]
+            )
+
+            self.assertTrue(output_path.exists())
+            self.assertTrue(ics_path.exists())
+            text = ics_path.read_text(encoding="utf-8")
+            self.assertIn("BEGIN:VCALENDAR", text)
+            self.assertIn("SUMMARY:", text)
+            self.assertNotIn("\r\r\n", text)
 
     def test_init_template_creates_expected_csv_files_and_headers(self) -> None:
         """The CSV template helper should create the complete folder contract."""

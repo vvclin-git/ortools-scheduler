@@ -1,0 +1,6 @@
+key,value
+mode,weekly_planning
+planning_start,2026-05-04T10:00:00
+planning_end,2026-05-06T20:00:00
+slot_size_min,30
+max_solve_seconds,5.0
