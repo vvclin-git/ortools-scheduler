@@ -1,0 +1,272 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f7f4;
+  --panel: #ffffff;
+  --ink: #1f2933;
+  --muted: #667085;
+  --line: #d8ded6;
+  --accent: #287c71;
+  --accent-dark: #1f625a;
+  --lesson: #f1b44c;
+  --lesson-changed: #cf5c36;
+  --availability: #d7eadf;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 28px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+p {
+  margin: 0;
+  color: var(--muted);
+}
+
+button {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  border-radius: 6px;
+  padding: 9px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-dark);
+}
+
+.secondary {
+  background: var(--panel);
+  color: var(--accent);
+}
+
+.secondary:hover,
+.icon-button:hover {
+  background: #eef7f4;
+  color: var(--accent-dark);
+}
+
+.icon-button {
+  background: var(--panel);
+  color: var(--accent);
+  border-color: var(--line);
+  padding: 7px 9px;
+  white-space: nowrap;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+main {
+  padding: 18px 28px 28px;
+}
+
+.summary-bar {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.summary-item {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.summary-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.summary-value {
+  display: block;
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.tab {
+  background: var(--panel);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.tab.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.view {
+  display: none;
+}
+
+.view.active {
+  display: block;
+}
+
+.setup-grid {
+  display: grid;
+  gap: 18px;
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.calendar-shell,
+.input-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: 72px repeat(7, minmax(150px, 1fr));
+  min-width: 1120px;
+}
+
+.calendar-cell {
+  min-height: 38px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 4px;
+  position: relative;
+}
+
+.calendar-head,
+.time-cell {
+  background: #eef2ed;
+  font-weight: 800;
+}
+
+.time-cell {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.available {
+  background: var(--availability);
+}
+
+.lesson-block {
+  border-left: 4px solid var(--lesson);
+  background: #fff8e7;
+  border-radius: 4px;
+  padding: 5px 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  line-height: 1.25;
+  box-shadow: 0 1px 2px rgba(31, 41, 51, 0.12);
+}
+
+.lesson-block.changed {
+  border-left-color: var(--lesson-changed);
+  background: #fff0ea;
+}
+
+.lesson-title {
+  display: block;
+  font-weight: 800;
+}
+
+.lesson-meta {
+  color: var(--muted);
+}
+
+.input-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+}
+
+.input-table.compact {
+  min-width: 620px;
+}
+
+.input-table th,
+.input-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 8px;
+  vertical-align: top;
+  text-align: left;
+}
+
+.input-table th {
+  background: #eef2ed;
+  font-size: 13px;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px;
+  color: var(--ink);
+  font: inherit;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 42px;
+}
+
+.warning {
+  color: #9a3412;
+}
+
+@media (max-width: 820px) {
+  .app-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .summary-bar {
+    grid-template-columns: 1fr 1fr;
+  }
+}

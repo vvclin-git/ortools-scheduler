@@ -16,11 +16,13 @@ import contextlib
 import copy
 import io
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
 import run_solver_from_csv as csv_runner
+import schedule_web_app
 import trainer_solver_mvp as solver
 
 
@@ -805,6 +807,203 @@ class TrainerSolverMvpTests(unittest.TestCase):
             printed = stdout.getvalue()
             self.assertIn("validation=failed", printed)
             self.assertIn("missing student_id", printed)
+
+    def test_web_timeslot_parser_accepts_compact_weekly_string(self) -> None:
+        """The web input format should map cleanly to preferences.csv rows."""
+        preferences = schedule_web_app.parse_timeslot_string(
+            "stu_alice",
+            "Mon 18:00-21:00 preferred 100; Wed 19:00-21:00 acceptable 60",
+        )
+
+        self.assertEqual(2, len(preferences))
+        self.assertEqual("stu_alice", preferences[0].student_id)
+        self.assertEqual("Mon", preferences[0].day)
+        self.assertEqual("18:00", preferences[0].start)
+        self.assertEqual("21:00", preferences[0].end)
+        self.assertEqual("preferred", preferences[0].level)
+        self.assertEqual(100, preferences[0].score)
+
+    def test_web_timeslot_formatter_round_trips_compact_string(self) -> None:
+        """Existing preferences should render into the editable compact string."""
+        text = schedule_web_app.format_timeslot_string(
+            [
+                solver.StudentPreference("stu_alice", "Mon", "18:00", "21:00", "preferred", 100),
+                solver.StudentPreference("stu_alice", "Wed", "19:00", "21:00", "acceptable", 60),
+            ]
+        )
+
+        self.assertEqual(
+            "Mon 18:00-21:00 preferred 100; Wed 19:00-21:00 acceptable 60",
+            text,
+        )
+
+    def test_web_save_student_preferences_writes_csv_rows(self) -> None:
+        """Saving the web table should rewrite students.csv and preferences.csv."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            result = schedule_web_app.save_student_preferences(
+                input_dir,
+                [
+                    {
+                        "student_id": "stu_alice",
+                        "student_name": "Alice Updated",
+                        "available_timeslots": "Tue 10:00-12:00 preferred 100",
+                        "venues": "default=gym_a",
+                    }
+                ],
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertIn("Alice Updated", (input_dir / "students.csv").read_text(encoding="utf-8"))
+            self.assertIn("Tue,10:00,12:00,preferred,100", (input_dir / "preferences.csv").read_text(encoding="utf-8"))
+
+    def test_web_save_student_preferences_rejects_invalid_timeslot_without_writing(self) -> None:
+        """Invalid web input should not overwrite existing CSV files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+            original = (input_dir / "preferences.csv").read_text(encoding="utf-8")
+
+            with self.assertRaises(schedule_web_app.WebInputError):
+                schedule_web_app.save_student_preferences(
+                    input_dir,
+                    [
+                        {
+                            "student_id": "stu_alice",
+                            "student_name": "Alice",
+                            "available_timeslots": "Monday evening",
+                            "venues": "default=gym_a",
+                        }
+                    ],
+                )
+
+            self.assertEqual(original, (input_dir / "preferences.csv").read_text(encoding="utf-8"))
+
+    def test_web_save_student_preferences_rejects_unknown_default_venue(self) -> None:
+        """The v1 venue string should validate against venues.csv."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            with self.assertRaises(schedule_web_app.WebInputError) as raised:
+                schedule_web_app.save_student_preferences(
+                    input_dir,
+                    [
+                        {
+                            "student_id": "stu_alice",
+                            "student_name": "Alice",
+                            "available_timeslots": "Mon 18:00-21:00 preferred 100",
+                            "venues": "default=missing_gym",
+                        }
+                    ],
+                )
+
+            self.assertIn("Unknown default venue_id", raised.exception.errors[0]["message"])
+
+    def test_web_save_venues_and_travel_times_writes_csv_rows(self) -> None:
+        """The web setup editor should rewrite venues.csv and travel_times.csv."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            result = schedule_web_app.save_venues_and_travel_times(
+                input_dir,
+                [
+                    {"venue_id": "gym_a", "venue_name": "Left Studio"},
+                    {"venue_id": "gym_b", "venue_name": "Right Studio"},
+                    {"venue_id": "gym_c", "venue_name": "New Studio"},
+                ],
+                [
+                    {"from_venue_id": "gym_a", "to_venue_id": "gym_a", "travel_min": "0"},
+                    {"from_venue_id": "gym_a", "to_venue_id": "gym_c", "travel_min": "35"},
+                ],
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertIn("gym_c,New Studio", (input_dir / "venues.csv").read_text(encoding="utf-8"))
+            self.assertIn("gym_a,gym_c,35", (input_dir / "travel_times.csv").read_text(encoding="utf-8"))
+
+    def test_web_save_venues_rejects_removing_referenced_venue(self) -> None:
+        """Venue deletion should not leave existing scheduler input with missing references."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            with self.assertRaises(schedule_web_app.WebInputError) as raised:
+                schedule_web_app.save_venues_and_travel_times(
+                    input_dir,
+                    [{"venue_id": "gym_b", "venue_name": "Right Studio"}],
+                    [{"from_venue_id": "gym_b", "to_venue_id": "gym_b", "travel_min": "0"}],
+                )
+
+            messages = " ".join(error["message"] for error in raised.exception.errors)
+            self.assertIn("Cannot remove venue_id=gym_a", messages)
+
+    def test_web_save_trainer_availability_writes_csv_rows(self) -> None:
+        """Trainer timeslot edits should rewrite coach_availability.csv."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            result = schedule_web_app.save_trainer_availability(
+                input_dir,
+                [
+                    {"day": "Mon", "start": "09:00", "end": "12:00", "score": "5"},
+                    {"day": "Sat", "start": "13:00", "end": "18:00", "score": "0"},
+                ],
+            )
+
+            self.assertTrue(result["ok"])
+            text = (input_dir / "coach_availability.csv").read_text(encoding="utf-8")
+            self.assertIn("Mon,09:00,12:00,5", text)
+            self.assertIn("Sat,13:00,18:00,0", text)
+
+    def test_web_save_trainer_availability_rejects_bad_time_range(self) -> None:
+        """Trainer timeslot validation should reject start times after end times."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            with self.assertRaises(schedule_web_app.WebInputError) as raised:
+                schedule_web_app.save_trainer_availability(
+                    input_dir,
+                    [{"day": "Mon", "start": "18:00", "end": "10:00", "score": "0"}],
+                )
+
+            self.assertIn("start must be before end", raised.exception.errors[0]["message"])
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_web_run_solver_returns_solution_shape(self) -> None:
+        """The web backend solve helper should write and return solver output."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            output_path = Path(temp_dir) / "solution.json"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            result = schedule_web_app.run_solver(input_dir, output_path)
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(output_path.exists())
+            self.assertIn(result["solution"]["status"], {"OPTIMAL", "FEASIBLE"})
+            self.assertGreater(len(result["solution"]["schedule"]), 0)
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_web_api_data_includes_solution_for_calendar_grid(self) -> None:
+        """The data payload should include enough solved rows for the weekly grid."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            output_path = Path(temp_dir) / "solution.json"
+            shutil.copytree("csv_demo_input", input_dir)
+            schedule_web_app.run_solver(input_dir, output_path)
+
+            payload = schedule_web_app.build_api_data(input_dir, output_path)
+
+            self.assertIn("table_rows", payload)
+            self.assertIn("lessons", payload)
+            self.assertIn("coach_availability", payload)
+            self.assertGreater(len(payload["solution"]["schedule"]), 0)
 
 
 if __name__ == "__main__":

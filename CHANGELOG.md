@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Added a local browser schedule organizer with a standard-library Python web
+  server, CSV-backed student availability editing, optimizer execution, and a
+  weekly grid output view.
+- Added frontend editing for students, venues, venue travel times, and trainer
+  timeslots.
 - Added `--print-solution` to print a compact terminal schedule and change
   table for quick review.
 - Added `--init-template` to generate a starter CSV input folder using the
@@ -43,9 +48,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Tested
 
-- Expanded the unit suite from 7 to 21 tests, covering solver validation,
+- Expanded the unit suite to 39 tests, covering solver validation,
   fixed-booking conflicts, optional lessons, CLI solution printing, CSV
-  template creation, overwrite protection, and validation-only mode.
+  template creation, overwrite protection, validation-only mode, web frontend
+  parser behavior, CSV save validation, solve output shape, and weekly-grid
+  payload data.
+- Added backend coverage for venue/travel-time editing and trainer timeslot
+  validation.
 
 ## [0.1.0] - 2026-04-26
 

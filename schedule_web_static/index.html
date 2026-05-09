@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Trainer Schedule Organizer</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>Trainer Schedule Organizer</h1>
+        <p id="statusText">Loading schedule data...</p>
+      </div>
+      <div class="header-actions">
+        <button id="saveButton" type="button">Save Input</button>
+        <button id="solveButton" type="button">Run Optimizer</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="summary-bar" id="summaryBar"></section>
+
+      <nav class="tabs" aria-label="Schedule views">
+        <button class="tab active" type="button" data-view="organizer">Organizer</button>
+        <button class="tab" type="button" data-view="input">Schedule Input</button>
+        <button class="tab" type="button" data-view="setup">Setup</button>
+      </nav>
+
+      <section id="organizerView" class="view active" aria-label="Weekly organizer">
+        <div class="calendar-shell">
+          <div id="calendarGrid" class="calendar-grid"></div>
+        </div>
+      </section>
+
+      <section id="inputView" class="view" aria-label="Student availability input">
+        <div class="section-actions">
+          <button id="addStudentButton" class="secondary" type="button">Add Student</button>
+        </div>
+        <div class="input-table-wrap">
+          <table class="input-table">
+            <thead>
+              <tr>
+                <th>student_id</th>
+                <th>student_name</th>
+                <th>available_timeslots</th>
+                <th>venues</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="studentTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="setupView" class="view" aria-label="Scheduler setup">
+        <div class="setup-grid">
+          <section>
+            <div class="section-actions">
+              <h2>Venues</h2>
+              <button id="addVenueButton" class="secondary" type="button">Add Venue</button>
+            </div>
+            <div class="input-table-wrap">
+              <table class="input-table compact">
+                <thead>
+                  <tr>
+                    <th>venue_id</th>
+                    <th>venue_name</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="venueTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section>
+            <div class="section-actions">
+              <h2>Venue Travel Time</h2>
+              <button id="addTravelButton" class="secondary" type="button">Add Travel</button>
+            </div>
+            <div class="input-table-wrap">
+              <table class="input-table compact">
+                <thead>
+                  <tr>
+                    <th>from_venue_id</th>
+                    <th>to_venue_id</th>
+                    <th>travel_min</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="travelTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section>
+            <div class="section-actions">
+              <h2>Trainer Timeslots</h2>
+              <button id="addTrainerButton" class="secondary" type="button">Add Timeslot</button>
+            </div>
+            <div class="input-table-wrap">
+              <table class="input-table compact">
+                <thead>
+                  <tr>
+                    <th>day</th>
+                    <th>start</th>
+                    <th>end</th>
+                    <th>score</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="trainerTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <template id="studentRowTemplate">
+      <tr>
+        <td><input data-field="student_id" spellcheck="false"></td>
+        <td><input data-field="student_name"></td>
+        <td><textarea data-field="available_timeslots" rows="2" spellcheck="false" placeholder="Mon 18:00-21:00 preferred 100; Wed 19:00-21:00 acceptable 60"></textarea></td>
+        <td><input data-field="venues" spellcheck="false" placeholder="default=gym_a"></td>
+        <td><button class="icon-button remove-row" type="button" aria-label="Remove student">Remove</button></td>
+      </tr>
+    </template>
+
+    <template id="venueRowTemplate">
+      <tr>
+        <td><input data-field="venue_id" spellcheck="false" placeholder="gym_a"></td>
+        <td><input data-field="venue_name" placeholder="Main Studio"></td>
+        <td><button class="icon-button remove-row" type="button" aria-label="Remove venue">Remove</button></td>
+      </tr>
+    </template>
+
+    <template id="travelRowTemplate">
+      <tr>
+        <td><input data-field="from_venue_id" spellcheck="false" placeholder="gym_a"></td>
+        <td><input data-field="to_venue_id" spellcheck="false" placeholder="gym_b"></td>
+        <td><input data-field="travel_min" inputmode="numeric" spellcheck="false" placeholder="30"></td>
+        <td><button class="icon-button remove-row" type="button" aria-label="Remove travel time">Remove</button></td>
+      </tr>
+    </template>
+
+    <template id="trainerRowTemplate">
+      <tr>
+        <td>
+          <select data-field="day">
+            <option>Mon</option>
+            <option>Tue</option>
+            <option>Wed</option>
+            <option>Thu</option>
+            <option>Fri</option>
+            <option>Sat</option>
+            <option>Sun</option>
+          </select>
+        </td>
+        <td><input data-field="start" spellcheck="false" placeholder="10:00"></td>
+        <td><input data-field="end" spellcheck="false" placeholder="22:00"></td>
+        <td><input data-field="score" inputmode="numeric" spellcheck="false" placeholder="0"></td>
+        <td><button class="icon-button remove-row" type="button" aria-label="Remove trainer timeslot">Remove</button></td>
+      </tr>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

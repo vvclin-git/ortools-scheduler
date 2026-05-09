@@ -87,6 +87,17 @@ The ICS export includes lesson events and transparent trainer-availability
 events. Shared lessons are grouped into one event, and any lesson outside coach
 availability is prefixed with `[OUTSIDE AVAILABILITY]`.
 
+Run the local browser organizer:
+
+```bash
+uv run python schedule_web_app.py --input csv_demo_input --output solution.json --port 8000
+```
+
+Then open `http://127.0.0.1:8000`. The organizer reads and writes the same CSV
+folder, lets you edit students, student availability, venues, venue travel
+times, and trainer timeslots in tables, runs the optimizer, and visualizes the
+solved schedule in a weekly grid.
+
 ## CSV Input
 
 CSV input is stored as one folder with required and optional files.
