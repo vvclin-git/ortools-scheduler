@@ -261,6 +261,30 @@ async function runOptimizer() {
   }
 }
 
+async function importCsvFiles() {
+  const input = document.getElementById("csvFileInput");
+  if (!input.files.length) {
+    setStatus("Choose one or more scheduler CSV files first", true);
+    return;
+  }
+  const formData = new FormData();
+  [...input.files].forEach((file) => formData.append("files", file, file.name));
+  setStatus("Importing CSV files...");
+  try {
+    const payload = await fetchJson("/api/import-csv", {
+      method: "POST",
+      body: formData,
+    });
+    await loadData();
+    const warningCount = (payload.validation_warnings || []).length;
+    setStatus(`Imported ${payload.imported_files.length} CSV file(s)${warningCount ? ` with ${warningCount} warning(s)` : ""}`);
+    input.value = "";
+  } catch (error) {
+    const messages = (error.errors || []).map((item) => `${item.field}: ${item.message}`);
+    setStatus(messages.join("; ") || "CSV import failed", true);
+  }
+}
+
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
@@ -272,6 +296,7 @@ document.querySelectorAll(".tab").forEach((button) => {
 
 document.getElementById("saveButton").addEventListener("click", saveInput);
 document.getElementById("solveButton").addEventListener("click", runOptimizer);
+document.getElementById("importCsvButton").addEventListener("click", importCsvFiles);
 document.getElementById("addStudentButton").addEventListener("click", () => appendRow("studentTableBody", "studentRowTemplate", {
   student_id: "",
   student_name: "",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import cgi
 import json
 import re
 from dataclasses import asdict
@@ -14,6 +15,8 @@ from urllib.parse import urlparse
 
 from run_solver_from_csv import (
     CsvInputError,
+    OPTIONAL_FILES,
+    REQUIRED_FILES,
     load_absences,
     load_coach_availability,
     load_existing_bookings,
@@ -39,6 +42,7 @@ TIMESLOT_RE = re.compile(
 )
 DEFAULT_VENUE_RE = re.compile(r"^default=(?P<venue_id>[A-Za-z0-9_.:-]+)$")
 STATIC_DIR = Path(__file__).with_name("schedule_web_static")
+IMPORTABLE_FILES = set(REQUIRED_FILES + OPTIONAL_FILES)
 
 
 class WebInputError(ValueError):
@@ -128,6 +132,63 @@ def write_csv_rows(path: Path, headers: List[str], rows: List[Dict[str, str]]) -
         write_csv(path, rows)
         return
     path.write_text(",".join(headers) + "\n", encoding="utf-8", newline="")
+
+
+def import_csv_files(input_dir: Path, files: Dict[str, bytes]) -> Dict[str, Any]:
+    """Validate and write uploaded scheduler CSV files into the active input folder."""
+    if not files:
+        raise WebInputError([{"row": 0, "field": "files", "message": "At least one CSV file is required"}])
+
+    errors: List[Dict[str, Any]] = []
+    for file_name, content in files.items():
+        if file_name not in IMPORTABLE_FILES:
+            errors.append(
+                {
+                    "row": 0,
+                    "field": "files",
+                    "message": f"Unsupported CSV file: {file_name}",
+                }
+            )
+        if not content.strip():
+            errors.append(
+                {
+                    "row": 0,
+                    "field": file_name,
+                    "message": "Uploaded CSV file is empty",
+                }
+            )
+
+    remaining_required = [
+        name
+        for name in REQUIRED_FILES
+        if name not in files and not (input_dir / name).exists()
+    ]
+    if remaining_required:
+        errors.append(
+            {
+                "row": 0,
+                "field": "files",
+                "message": f"Missing required CSV files: {', '.join(remaining_required)}",
+            }
+        )
+
+    if errors:
+        raise WebInputError(errors)
+
+    input_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+    for file_name, content in files.items():
+        path = input_dir / file_name
+        path.write_bytes(content.replace(b"\r\n", b"\n"))
+        written.append(file_name)
+
+    request = load_solver_request(input_dir)
+    validation_warnings = validate_solver_request(request)
+    return {
+        "ok": True,
+        "imported_files": sorted(written),
+        "validation_warnings": validation_warnings,
+    }
 
 
 def build_table_rows(input_dir: Path) -> List[Dict[str, str]]:
@@ -489,6 +550,9 @@ class ScheduleWebHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/solve":
                 self.send_json(run_solver(self.input_dir, self.output_path))
                 return
+            if parsed.path == "/api/import-csv":
+                self.send_json(import_csv_files(self.input_dir, self.read_multipart_files()))
+                return
             self.send_json({"error": "Unknown endpoint"}, HTTPStatus.NOT_FOUND)
         except WebInputError as exc:
             self.send_json({"ok": False, "errors": exc.errors}, HTTPStatus.BAD_REQUEST)
@@ -501,6 +565,30 @@ class ScheduleWebHandler(SimpleHTTPRequestHandler):
             return {}
         body = self.rfile.read(length).decode("utf-8")
         return json.loads(body)
+
+    def read_multipart_files(self) -> Dict[str, bytes]:
+        """Read uploaded CSV files from multipart/form-data."""
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            raise WebInputError([{"row": 0, "field": "files", "message": "Expected multipart/form-data"}])
+        form = cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ={
+                "REQUEST_METHOD": "POST",
+                "CONTENT_TYPE": content_type,
+            },
+        )
+        files: Dict[str, bytes] = {}
+        fields = form["files"] if "files" in form else []
+        if not isinstance(fields, list):
+            fields = [fields]
+        for field in fields:
+            file_name = Path(field.filename or "").name
+            if not file_name:
+                continue
+            files[file_name] = field.file.read()
+        return files
 
     def send_json(self, payload: Dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         encoded = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")

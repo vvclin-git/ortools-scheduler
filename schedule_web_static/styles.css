@@ -157,10 +157,15 @@ h2 {
 }
 
 .calendar-shell,
-.input-table-wrap {
+.input-table-wrap,
+.file-import {
   overflow: auto;
   border: 1px solid var(--line);
   background: var(--panel);
+}
+
+.file-import {
+  padding: 12px;
 }
 
 .calendar-grid {

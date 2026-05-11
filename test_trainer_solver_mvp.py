@@ -974,6 +974,38 @@ class TrainerSolverMvpTests(unittest.TestCase):
 
             self.assertIn("start must be before end", raised.exception.errors[0]["message"])
 
+    def test_web_import_csv_files_writes_known_scheduler_files(self) -> None:
+        """CSV upload should overwrite supported scheduler CSV files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            result = schedule_web_app.import_csv_files(
+                input_dir,
+                {
+                    "coach_availability.csv": b"day,start,end,score\nSat,09:00,12:00,0\n",
+                    "preferences.csv": b"student_id,day,start,end,level,score\nstu_alice,Sat,09:00,12:00,preferred,100\n",
+                },
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(["coach_availability.csv", "preferences.csv"], result["imported_files"])
+            self.assertIn("Sat,09:00,12:00,0", (input_dir / "coach_availability.csv").read_text(encoding="utf-8"))
+
+    def test_web_import_csv_files_rejects_unknown_file_name(self) -> None:
+        """CSV upload should reject files outside the scheduler CSV contract."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            with self.assertRaises(schedule_web_app.WebInputError) as raised:
+                schedule_web_app.import_csv_files(
+                    input_dir,
+                    {"notes.csv": b"hello,world\n"},
+                )
+
+            self.assertIn("Unsupported CSV file", raised.exception.errors[0]["message"])
+
     @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
     def test_web_run_solver_returns_solution_shape(self) -> None:
         """The web backend solve helper should write and return solver output."""

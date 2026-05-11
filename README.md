@@ -98,6 +98,10 @@ folder, lets you edit students, student availability, venues, venue travel
 times, and trainer timeslots in tables, runs the optimizer, and visualizes the
 solved schedule in a weekly grid.
 
+The setup page also accepts direct CSV uploads for the scheduler input files,
+including `students.csv`, `preferences.csv`, `coach_availability.csv`,
+`venues.csv`, `travel_times.csv`, `lessons.csv`, and the optional CSV files.
+
 ## CSV Input
 
 CSV input is stored as one folder with required and optional files.
