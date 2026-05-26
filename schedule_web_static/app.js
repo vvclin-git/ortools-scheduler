@@ -3,9 +3,13 @@ const START_HOUR = 8;
 const END_HOUR = 23;
 
 let appData = null;
+let currentSolution = null;
+let evaluationResult = null;
+let draggedGroupKey = null;
+const dirtySections = new Set();
 
 function esc(value) {
-  return String(value)
+  return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -33,6 +37,39 @@ function timeFromIso(value) {
   return value.slice(11, 16);
 }
 
+function formatIsoLocal(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
+function dateForDayAndTime(anchorIso, targetDay, targetMinutes) {
+  const date = new Date(anchorIso);
+  const mondayOffset = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - mondayOffset + DAYS.indexOf(targetDay));
+  date.setHours(Math.floor(targetMinutes / 60), targetMinutes % 60, 0, 0);
+  return date;
+}
+
+function planningAnchorIso() {
+  return (appData && appData.config && appData.config.planning_start)
+    || (currentSolution && currentSolution.schedule && currentSolution.schedule[0] && currentSolution.schedule[0].start_datetime)
+    || new Date().toISOString();
+}
+
+function addMinutes(iso, amount) {
+  const date = new Date(iso);
+  date.setMinutes(date.getMinutes() + amount);
+  return formatIsoLocal(date);
+}
+
+function durationMinutes(startIso, endIso) {
+  return Math.round((new Date(endIso) - new Date(startIso)) / 60000);
+}
+
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
   const payload = await response.json();
@@ -45,13 +82,27 @@ async function fetchJson(url, options = {}) {
 async function loadData() {
   setStatus("Loading schedule data...");
   appData = await fetchJson("/api/data");
+  currentSolution = appData.solution ? structuredClone(appData.solution) : null;
+  applyLessonRowsToSchedule();
+  const syncResult = syncScheduleToCurrentInput();
+  evaluationResult = null;
+  renderAll();
+  if (currentSolution) {
+    await evaluateCurrentSchedule();
+  }
+  setStatus("Ready");
+  return syncResult;
+}
+
+function renderAll() {
   renderTable(appData.table_rows);
+  renderLessonTable(appData.lesson_rows || []);
   renderVenueTable(appData.venue_rows);
   renderTravelTable(appData.travel_time_rows);
   renderTrainerTable(appData.trainer_availability_rows);
-  renderSummary(appData.solution, appData.validation_warnings);
+  renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
   renderCalendar(appData);
-  setStatus("Ready");
+  renderDiagnostics();
 }
 
 function setStatus(text, isWarning = false) {
@@ -60,18 +111,16 @@ function setStatus(text, isWarning = false) {
   node.className = isWarning ? "warning" : "";
 }
 
-function renderSummary(solution, warnings) {
+function renderSummary(solution, warnings, evaluation) {
   const summary = solution && solution.summary ? solution.summary : {};
+  const issueCount = evaluation ? (evaluation.diagnostics || []).length : (warnings || []).length;
   const items = [
     ["Status", solution ? solution.status : "No solution"],
     ["Scheduled", summary.scheduled_lessons ?? "-"],
     ["Unscheduled", summary.unscheduled_lessons ?? "-"],
-    ["Changed", summary.changed_lessons ?? "-"],
-    ["Candidates", summary.candidate_count ?? "-"],
+    ["Score", evaluation ? evaluation.score : (summary.objective_value ?? "-")],
+    ["Issues", issueCount],
   ];
-  if (warnings && warnings.length > 0) {
-    items[0][1] = `${items[0][1]} - ${warnings.length} warning(s)`;
-  }
   document.getElementById("summaryBar").innerHTML = items.map(([label, value]) => `
     <div class="summary-item">
       <span class="summary-label">${esc(label)}</span>
@@ -80,8 +129,54 @@ function renderSummary(solution, warnings) {
   `).join("");
 }
 
+function renderDiagnostics() {
+  const lines = [];
+  if (!currentSolution) {
+    lines.push("No optimized solution has been loaded.");
+  } else {
+    lines.push(`Solver status: ${currentSolution.status}`);
+    if (currentSolution.summary) {
+      lines.push(`Solver objective: ${currentSolution.summary.objective_value ?? "-"}`);
+      lines.push(`Scheduled: ${currentSolution.summary.scheduled_lessons}, unscheduled: ${currentSolution.summary.unscheduled_lessons}, changed: ${currentSolution.summary.changed_lessons ?? "-"}`);
+    }
+    (currentSolution.warnings || []).forEach((item) => lines.push(`Solver warning: ${item}`));
+    (currentSolution.changes || []).forEach((item) => {
+      lines.push(`Change: ${item.lesson_id} ${item.change_type} ${item.old_start || "-"} -> ${item.new_start || "-"}`);
+    });
+  }
+  if (evaluationResult) {
+    lines.push("");
+    lines.push(`Evaluator score: ${evaluationResult.score}`);
+    (evaluationResult.warnings || []).forEach((item) => lines.push(`Evaluator warning: ${item}`));
+    (evaluationResult.diagnostics || []).forEach((item) => lines.push(`Diagnostic: ${item}`));
+    if (!(evaluationResult.diagnostics || []).length) {
+      lines.push("Diagnostic: no manual schedule issues found");
+    }
+  }
+  document.getElementById("diagnosticText").textContent = lines.join("\n");
+}
+
+function venueOptions(selected, useDefaultValue = false) {
+  return (appData.venues || []).map((venue) => {
+    const value = useDefaultValue ? `default=${venue.venue_id}` : venue.venue_id;
+    const label = `${venue.venue_id} - ${venue.name}`;
+    return `<option value="${esc(value)}" ${value === selected ? "selected" : ""}>${esc(label)}</option>`;
+  }).join("");
+}
+
+function studentOptions(selected) {
+  return (appData.students || []).map((student) => {
+    const label = `${student.student_id} - ${student.name}`;
+    return `<option value="${esc(student.student_id)}" ${student.student_id === selected ? "selected" : ""}>${esc(label)}</option>`;
+  }).join("");
+}
+
 function renderTable(rows) {
   renderRows("studentTableBody", "studentRowTemplate", rows);
+}
+
+function renderLessonTable(rows) {
+  renderRows("lessonTableBody", "lessonRowTemplate", rows);
 }
 
 function renderVenueTable(rows) {
@@ -107,12 +202,132 @@ function appendRow(bodyId, templateId, row = {}) {
   const template = document.getElementById(templateId);
   const fragment = template.content.cloneNode(true);
   fragment.querySelectorAll("[data-field]").forEach((input) => {
-    input.value = row[input.dataset.field] || "";
+    if (input.tagName === "SELECT" && input.dataset.field === "venues") {
+      input.innerHTML = venueOptions(row.venues || "", true);
+    } else if (input.tagName === "SELECT" && input.dataset.field === "venue_id") {
+      input.innerHTML = venueOptions(row.venue_id || "", false);
+    } else if (input.tagName === "SELECT" && input.dataset.field === "student_id") {
+      input.innerHTML = studentOptions(row.student_id || "");
+    } else if (input.tagName === "SELECT" && input.dataset.field === "booking_status" && row.booking_status === "in_progress") {
+      input.insertAdjacentHTML("beforeend", '<option value="in_progress" disabled>in_progress</option>');
+    }
+    input.value = row[input.dataset.field] || input.value || "";
+    if (bodyId === "lessonTableBody" && input.dataset.field === "booking_end") {
+      input.value = lessonRowEnd(row);
+    }
   });
   fragment.querySelector(".remove-row").addEventListener("click", (event) => {
     event.target.closest("tr").remove();
+    markDirty(sectionForBody(bodyId));
+  });
+  fragment.querySelectorAll("[data-field]").forEach((input) => {
+    input.addEventListener("input", () => handleRowEdit(bodyId, input));
+    input.addEventListener("change", () => handleRowEdit(bodyId, input));
   });
   body.appendChild(fragment);
+  if (bodyId === "lessonTableBody") {
+    updateLessonBookingControlState(body.lastElementChild);
+  }
+}
+
+function markDirty(section) {
+  if (!section) {
+    return;
+  }
+  dirtySections.add(section);
+  setStatus(`${section} has unsaved changes`, true);
+}
+
+function clearDirty(section) {
+  dirtySections.delete(section);
+}
+
+function lessonRowEnd(row) {
+  if (!row.booking_start) {
+    return "";
+  }
+  const duration = Number(row.duration_min);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return "";
+  }
+  return timeFromIso(addMinutes(`2026-01-05T${row.booking_start}`, duration));
+}
+
+function updateLessonBookingControlState(row) {
+  if (!row) {
+    return;
+  }
+  const status = row.querySelector('[data-field="booking_status"]');
+  const start = row.querySelector('[data-field="booking_start"]');
+  const day = row.querySelector('[data-field="booking_day"]');
+  const end = row.querySelector('[data-field="booking_end"]');
+  const duration = row.querySelector('[data-field="duration_min"]');
+  const rowData = {};
+  row.querySelectorAll("[data-field]").forEach((input) => {
+    rowData[input.dataset.field] = input.value;
+  });
+  if (end) {
+    end.value = lessonRowEnd(rowData);
+  }
+  const fixed = status && ["completed", "locked", "in_progress"].includes(status.value);
+  if (status) {
+    status.disabled = status.value === "in_progress";
+  }
+  if (day) {
+    day.disabled = fixed;
+  }
+  if (start) {
+    start.disabled = fixed;
+  }
+  if (duration) {
+    duration.disabled = fixed;
+  }
+}
+
+function syncLessonRowsFromDom() {
+  appData.lesson_rows = collectLessonRows();
+  appData.lessons = appData.lesson_rows.map((row) => ({
+    lesson_id: row.lesson_id,
+    student_id: row.student_id,
+    venue_id: row.venue_id,
+    duration_min: Number(row.duration_min) || 0,
+    must_schedule: row.must_schedule !== "FALSE",
+    priority: Number(row.priority) || 0,
+    shared_session_id: row.shared_session_id || null,
+  }));
+}
+
+function sectionForBody(bodyId) {
+  if (bodyId === "studentTableBody") {
+    return "students";
+  }
+  if (bodyId === "lessonTableBody") {
+    return "lessons";
+  }
+  if (bodyId === "venueTableBody" || bodyId === "travelTableBody") {
+    return "venues";
+  }
+  if (bodyId === "trainerTableBody") {
+    return "trainer";
+  }
+  return "";
+}
+
+function handleRowEdit(bodyId, input) {
+  const section = sectionForBody(bodyId);
+  if (section) {
+    markDirty(section);
+  }
+  const row = input.closest("tr");
+  if (bodyId === "lessonTableBody") {
+    if (input.dataset.field === "duration_min" || input.dataset.field === "booking_start" || input.dataset.field === "booking_status") {
+      updateLessonBookingControlState(row);
+    }
+    syncLessonRowsFromDom();
+    applyLessonRowsToSchedule();
+    renderCalendar(appData);
+    evaluateCurrentSchedule().catch((error) => setStatus(JSON.stringify(error), true));
+  }
 }
 
 function collectTableRows(bodyId) {
@@ -127,6 +342,10 @@ function collectTableRows(bodyId) {
 
 function collectRows() {
   return collectTableRows("studentTableBody");
+}
+
+function collectLessonRows() {
+  return collectTableRows("lessonTableBody");
 }
 
 function collectVenueRows() {
@@ -161,16 +380,149 @@ function lessonGroups(solution, lessons) {
   const groups = new Map();
   solution.schedule.forEach((item) => {
     const lesson = lessonById.get(item.lesson_id);
-    const shared = lesson && lesson.shared_session_id;
+    const shared = item.shared_session_id || (lesson && lesson.shared_session_id);
     const key = shared
       ? `shared-${shared}-${item.start_datetime}-${item.end_datetime}-${item.venue_id}`
       : `lesson-${item.lesson_id}-${item.start_datetime}-${item.end_datetime}-${item.venue_id}`;
     if (!groups.has(key)) {
-      groups.set(key, []);
+      groups.set(key, {key, items: []});
     }
-    groups.get(key).push(item);
+    groups.get(key).items.push(item);
   });
   return [...groups.values()];
+}
+
+function currentLesson(item) {
+  return (appData.lessons || []).find((candidate) => candidate.lesson_id === item.lesson_id);
+}
+
+function lessonDuration(item) {
+  const lesson = currentLesson(item);
+  const duration = Number(lesson && lesson.duration_min);
+  return Number.isFinite(duration) && duration > 0
+    ? duration
+    : durationMinutes(item.start_datetime, item.end_datetime);
+}
+
+function groupDuration(group) {
+  return Math.max(...group.items.map((item) => lessonDuration(item)));
+}
+
+function lessonRowById() {
+  return new Map((appData.lesson_rows || []).map((row) => [row.lesson_id, row]));
+}
+
+function scheduleItemFromLessonRow(row) {
+  if (!row.booking_day || !row.booking_start || !row.booking_status) {
+    return null;
+  }
+  const lesson = (appData.lessons || []).find((item) => item.lesson_id === row.lesson_id) || row;
+  const student = (appData.students || []).find((item) => item.student_id === row.student_id) || {};
+  const venue = (appData.venues || []).find((item) => item.venue_id === row.venue_id) || {};
+  const start = formatIsoLocal(dateForDayAndTime(planningAnchorIso(), row.booking_day, minutes(row.booking_start)));
+  const duration = Number(row.duration_min) || durationMinutes(start, addMinutes(start, 60));
+  return {
+    lesson_id: row.lesson_id,
+    student_id: row.student_id,
+    student_name: student.name || row.student_id || row.lesson_id,
+    venue_id: row.venue_id,
+    venue_name: venue.name || row.venue_id,
+    start_datetime: start,
+    end_datetime: addMinutes(start, duration),
+    preference_level: "booking",
+    preference_score: 0,
+    is_changed: row.booking_dirty === "TRUE",
+    shared_session_id: row.shared_session_id || (lesson && lesson.shared_session_id) || "",
+  };
+}
+
+function applyLessonRowsToSchedule() {
+  if (!appData) {
+    return;
+  }
+  const bookingItems = (appData.lesson_rows || [])
+    .map(scheduleItemFromLessonRow)
+    .filter(Boolean);
+  if (!bookingItems.length) {
+    return;
+  }
+  currentSolution = currentSolution || {status: "BOOKINGS", summary: {}, schedule: [], changes: [], warnings: []};
+  const byLessonId = new Map((currentSolution.schedule || []).map((item) => [item.lesson_id, item]));
+  bookingItems.forEach((item) => byLessonId.set(item.lesson_id, item));
+  currentSolution.status = currentSolution.status || "BOOKINGS";
+  currentSolution.schedule = [...byLessonId.values()];
+  currentSolution.summary = {
+    ...(currentSolution.summary || {}),
+    scheduled_lessons: currentSolution.schedule.length,
+  };
+}
+
+function updateLessonRowsFromSchedule(items, status = "draft", dirty = true) {
+  const byLessonId = lessonRowById();
+  items.forEach((item) => {
+    const row = byLessonId.get(item.lesson_id);
+    if (!row) {
+      return;
+    }
+    row.booking_day = dayFromIso(item.start_datetime);
+    row.booking_start = timeFromIso(item.start_datetime);
+    row.booking_end = timeFromIso(item.end_datetime);
+    row.booking_status = dirty ? status : (row.booking_status || status);
+    row.booking_dirty = dirty ? "TRUE" : "";
+    row.booking_readonly = ["completed", "locked", "in_progress"].includes(row.booking_status) ? "TRUE" : "FALSE";
+  });
+}
+
+function syncScheduleToCurrentInput() {
+  if (!currentSolution || !currentSolution.schedule || !appData) {
+    return {resizedCount: 0, updatedCount: 0, removedCount: 0};
+  }
+  const studentById = new Map((appData.students || []).map((student) => [student.student_id, student]));
+  const venueById = new Map((appData.venues || []).map((venue) => [venue.venue_id, venue]));
+  let resizedCount = 0;
+  let updatedCount = 0;
+  let removedCount = 0;
+  const synced = [];
+  currentSolution.schedule.forEach((item) => {
+    const lesson = currentLesson(item);
+    if (!lesson) {
+      removedCount += 1;
+      return;
+    }
+    const student = studentById.get(lesson.student_id);
+    const venue = venueById.get(lesson.venue_id);
+    const duration = Number(lesson.duration_min);
+    const endDatetime = addMinutes(item.start_datetime, duration);
+    const next = {
+      ...item,
+      student_id: lesson.student_id,
+      student_name: student ? student.name : item.student_name,
+      venue_id: lesson.venue_id,
+      venue_name: venue ? venue.name : item.venue_name,
+      shared_session_id: lesson.shared_session_id || "",
+      end_datetime: endDatetime,
+    };
+    if (item.end_datetime !== endDatetime) {
+      resizedCount += 1;
+      next.is_changed = true;
+    }
+    if (
+      item.student_id !== next.student_id
+      || item.student_name !== next.student_name
+      || item.venue_id !== next.venue_id
+      || item.venue_name !== next.venue_name
+      || (item.shared_session_id || "") !== next.shared_session_id
+    ) {
+      updatedCount += 1;
+      next.is_changed = true;
+    }
+    synced.push(next);
+  });
+  currentSolution.schedule = synced;
+  if (currentSolution.summary) {
+    currentSolution.summary.scheduled_lessons = synced.length;
+  }
+  return {resizedCount, updatedCount, removedCount};
 }
 
 function renderCalendar(data) {
@@ -178,8 +530,8 @@ function renderCalendar(data) {
   const available = availabilityMap(data.coach_availability || []);
   const groupsByCell = new Map();
 
-  lessonGroups(data.solution, data.lessons || []).forEach((group) => {
-    const first = group[0];
+  lessonGroups(currentSolution, data.lessons || []).forEach((group) => {
+    const first = group.items[0];
     const day = dayFromIso(first.start_datetime);
     const start = minutes(timeFromIso(first.start_datetime));
     const key = `${day}-${start}`;
@@ -203,13 +555,13 @@ function renderCalendar(data) {
         classes.push("available");
       }
       const groups = groupsByCell.get(key) || [];
-      html += `<div class="${classes.join(" ")}">`;
+      html += `<div class="${classes.join(" ")}" data-day="${esc(day)}" data-minute="${mark}">`;
       groups.forEach((group) => {
-        const first = group[0];
-        const names = group.map((item) => item.student_name).join(" / ");
-        const changed = group.some((item) => item.is_changed);
+        const first = group.items[0];
+        const names = group.items.map((item) => item.student_name).join(" / ");
+        const changed = group.items.some((item) => item.is_changed);
         html += `
-          <div class="lesson-block ${changed ? "changed" : ""}">
+          <div class="lesson-block ${changed ? "changed" : ""}" draggable="true" data-group-key="${esc(group.key)}">
             <span class="lesson-title">${esc(names)}</span>
             <span class="lesson-meta">${esc(timeFromIso(first.start_datetime))}-${esc(timeFromIso(first.end_datetime))} - ${esc(first.venue_name)}</span>
           </div>`;
@@ -218,31 +570,291 @@ function renderCalendar(data) {
     });
   }
   grid.innerHTML = html;
+  bindCalendarDragHandlers();
 }
 
-async function saveInput() {
-  setStatus("Saving input...");
+function bindCalendarDragHandlers() {
+  document.querySelectorAll(".lesson-block").forEach((block) => {
+    block.addEventListener("dragstart", (event) => {
+      draggedGroupKey = block.dataset.groupKey;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", draggedGroupKey);
+    });
+  });
+  document.querySelectorAll(".calendar-cell[data-day]").forEach((cell) => {
+    cell.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      cell.classList.add("drop-target");
+    });
+    cell.addEventListener("dragleave", () => cell.classList.remove("drop-target"));
+    cell.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      cell.classList.remove("drop-target");
+      const key = event.dataTransfer.getData("text/plain") || draggedGroupKey;
+      await moveGroupTo(key, cell.dataset.day, Number(cell.dataset.minute));
+    });
+  });
+}
+
+async function moveGroupTo(groupKey, day, startMinute) {
+  if (!currentSolution || !groupKey) {
+    return;
+  }
+  const group = lessonGroups(currentSolution, appData.lessons || []).find((item) => item.key === groupKey);
+  if (!group) {
+    return;
+  }
+  const first = group.items[0];
+  const newStart = formatIsoLocal(dateForDayAndTime(first.start_datetime, day, startMinute));
+  const duration = groupDuration(group);
+  const newEnd = addMinutes(newStart, duration);
+  const lessonIds = new Set(group.items.map((item) => item.lesson_id));
+  currentSolution.schedule = currentSolution.schedule.map((item) => {
+    if (!lessonIds.has(item.lesson_id)) {
+      return item;
+    }
+    return {
+      ...item,
+      start_datetime: newStart,
+      end_datetime: newEnd,
+      is_changed: true,
+    };
+  });
+  updateLessonRowsFromSchedule(currentSolution.schedule.filter((item) => lessonIds.has(item.lesson_id)), "draft", true);
+  renderLessonTable(appData.lesson_rows || []);
+  markDirty("lessons");
+  renderCalendar(appData);
+  await evaluateCurrentSchedule();
+}
+
+function schedulePlacements() {
+  if (!currentSolution || !currentSolution.schedule) {
+    return [];
+  }
+  const lessonById = new Map((appData.lessons || []).map((lesson) => [lesson.lesson_id, lesson]));
+  return currentSolution.schedule.map((item) => {
+    const lesson = lessonById.get(item.lesson_id);
+    return {
+      lesson_id: item.lesson_id,
+      start_datetime: item.start_datetime,
+      end_datetime: item.end_datetime,
+      venue_id: item.venue_id,
+      shared_session_id: item.shared_session_id || (lesson && lesson.shared_session_id) || "",
+    };
+  });
+}
+
+async function evaluateCurrentSchedule() {
+  if (!currentSolution) {
+    evaluationResult = null;
+    renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
+    renderDiagnostics();
+    return;
+  }
+  evaluationResult = await fetchJson("/api/evaluate-schedule", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({schedule: schedulePlacements()}),
+  });
+  renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
+  renderDiagnostics();
+}
+
+function resetSchedule() {
+  currentSolution = appData.solution ? structuredClone(appData.solution) : null;
+  syncScheduleToCurrentInput();
+  if (currentSolution && currentSolution.schedule) {
+    updateLessonRowsFromSchedule(currentSolution.schedule, "draft", true);
+    renderLessonTable(appData.lesson_rows || []);
+    markDirty("lessons");
+  }
+  renderCalendar(appData);
+  evaluateCurrentSchedule().catch((error) => setStatus(JSON.stringify(error), true));
+  setStatus("Schedule reset to optimized solution");
+}
+
+function csvEscape(value) {
+  const text = String(value ?? "");
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+  return text;
+}
+
+function exportScheduleCsv() {
+  const headers = ["lesson_id", "start_datetime", "end_datetime", "venue_id", "shared_session_id"];
+  const lines = [headers.join(",")];
+  schedulePlacements().forEach((row) => {
+    lines.push(headers.map((header) => csvEscape(row[header])).join(","));
+  });
+  const blob = new Blob([`${lines.join("\n")}\n`], {type: "text/csv"});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "manual_schedule.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        cell += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows.filter((item) => item.some((cellValue) => cellValue.trim()));
+}
+
+async function importScheduleCsvFile(file) {
+  const rows = parseCsv(await file.text());
+  const headers = rows.shift() || [];
+  const required = ["lesson_id", "start_datetime", "end_datetime", "venue_id", "shared_session_id"];
+  if (required.some((header) => !headers.includes(header))) {
+    setStatus("Schedule CSV is missing required placement columns", true);
+    return;
+  }
+  const imported = rows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] || ""])));
+  const lessonById = new Map((appData.lessons || []).map((lesson) => [lesson.lesson_id, lesson]));
+  const studentById = new Map((appData.students || []).map((student) => [student.student_id, student]));
+  const venueById = new Map((appData.venues || []).map((venue) => [venue.venue_id, venue]));
+  currentSolution = currentSolution || {status: "MANUAL", summary: {}, schedule: [], changes: [], warnings: []};
+  currentSolution.status = "MANUAL";
+  currentSolution.schedule = imported.map((row) => {
+    const lesson = lessonById.get(row.lesson_id) || {};
+    const student = studentById.get(lesson.student_id) || {};
+    const venue = venueById.get(row.venue_id) || {};
+    return {
+      lesson_id: row.lesson_id,
+      student_id: lesson.student_id || "",
+      student_name: student.name || row.lesson_id,
+      venue_id: row.venue_id,
+      venue_name: venue.name || row.venue_id,
+      start_datetime: row.start_datetime,
+      end_datetime: row.end_datetime,
+      preference_level: "manual",
+      preference_score: 0,
+      is_changed: true,
+      shared_session_id: row.shared_session_id || "",
+    };
+  });
+  currentSolution.summary = {
+    ...(currentSolution.summary || {}),
+    scheduled_lessons: currentSolution.schedule.length,
+  };
+  updateLessonRowsFromSchedule(currentSolution.schedule, "draft", true);
+  renderLessonTable(appData.lesson_rows || []);
+  markDirty("lessons");
+  renderCalendar(appData);
+  await evaluateCurrentSchedule();
+  setStatus(`Imported ${currentSolution.schedule.length} schedule placement(s)`);
+}
+
+function formatErrorStatus(error, fallback) {
+  const messages = (error.errors || []).map((item) => `row ${item.row} ${item.field}: ${item.message}`);
+  return messages.join("; ") || fallback;
+}
+
+async function saveStudents() {
+  setStatus("Saving students...");
+  try {
+    await fetchJson("/api/students/preferences", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({rows: collectRows()}),
+    });
+    clearDirty("students");
+    await loadData();
+    setStatus("Students saved");
+  } catch (error) {
+    setStatus(formatErrorStatus(error, "Save students failed"), true);
+  }
+}
+
+async function saveLessons() {
+  setStatus("Saving lessons...");
+  try {
+    syncLessonRowsFromDom();
+    await fetchJson("/api/lessons", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({rows: collectLessonRows()}),
+    });
+    clearDirty("lessons");
+    const result = await loadData();
+    const details = [];
+    if (result.updatedCount) {
+      details.push(`updated ${result.updatedCount} visible placement(s)`);
+    }
+    if (result.resizedCount) {
+      details.push(`resized ${result.resizedCount} visible placement(s)`);
+    }
+    if (result.removedCount) {
+      details.push(`removed ${result.removedCount} stale placement(s)`);
+    }
+    setStatus(`Lessons saved${details.length ? `; ${details.join("; ")}` : ""}`);
+  } catch (error) {
+    setStatus(formatErrorStatus(error, "Save lessons failed"), true);
+  }
+}
+
+async function saveVenuesAndTravel() {
+  setStatus("Saving venues and travel...");
   try {
     await fetchJson("/api/venues/travel", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({venues: collectVenueRows(), travel_times: collectTravelRows()}),
     });
+    clearDirty("venues");
+    await loadData();
+    setStatus("Venues and travel saved");
+  } catch (error) {
+    setStatus(formatErrorStatus(error, "Save venues and travel failed"), true);
+  }
+}
+
+async function saveTrainerAvailability() {
+  setStatus("Saving trainer timeslots...");
+  try {
     await fetchJson("/api/trainer-availability", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({rows: collectTrainerRows()}),
     });
-    await fetchJson("/api/students/preferences", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({rows: collectRows()}),
-    });
+    clearDirty("trainer");
     await loadData();
-    setStatus("Input saved");
+    setStatus("Trainer timeslots saved");
   } catch (error) {
-    const messages = (error.errors || []).map((item) => `row ${item.row} ${item.field}: ${item.message}`);
-    setStatus(messages.join("; ") || "Save failed", true);
+    setStatus(formatErrorStatus(error, "Save trainer timeslots failed"), true);
   }
 }
 
@@ -255,7 +867,13 @@ async function runOptimizer() {
       return;
     }
     await loadData();
-    setStatus("Optimizer finished");
+    if (currentSolution && currentSolution.schedule) {
+      updateLessonRowsFromSchedule(currentSolution.schedule, "draft", true);
+      renderLessonTable(appData.lesson_rows || []);
+      applyLessonRowsToSchedule();
+      markDirty("lessons");
+    }
+    setStatus("Optimizer finished; review and save Lessons to persist draft booking times");
   } catch (error) {
     setStatus(JSON.stringify(error), true);
   }
@@ -294,14 +912,41 @@ document.querySelectorAll(".tab").forEach((button) => {
   });
 });
 
-document.getElementById("saveButton").addEventListener("click", saveInput);
 document.getElementById("solveButton").addEventListener("click", runOptimizer);
+document.getElementById("saveStudentsButton").addEventListener("click", saveStudents);
+document.getElementById("saveLessonsButton").addEventListener("click", saveLessons);
+document.getElementById("saveVenuesButton").addEventListener("click", saveVenuesAndTravel);
+document.getElementById("saveTrainerButton").addEventListener("click", saveTrainerAvailability);
+document.getElementById("resetScheduleButton").addEventListener("click", resetSchedule);
+document.getElementById("exportScheduleButton").addEventListener("click", exportScheduleCsv);
+document.getElementById("importScheduleButton").addEventListener("click", () => document.getElementById("scheduleCsvInput").click());
+document.getElementById("scheduleCsvInput").addEventListener("change", (event) => {
+  const file = event.target.files[0];
+  if (file) {
+    importScheduleCsvFile(file).catch((error) => setStatus(JSON.stringify(error), true));
+  }
+  event.target.value = "";
+});
 document.getElementById("importCsvButton").addEventListener("click", importCsvFiles);
 document.getElementById("addStudentButton").addEventListener("click", () => appendRow("studentTableBody", "studentRowTemplate", {
   student_id: "",
   student_name: "",
   available_timeslots: "",
-  venues: "default=",
+  venues: appData.venues && appData.venues[0] ? `default=${appData.venues[0].venue_id}` : "",
+}));
+document.getElementById("addLessonButton").addEventListener("click", () => appendRow("lessonTableBody", "lessonRowTemplate", {
+  lesson_id: "",
+  student_id: appData.students && appData.students[0] ? appData.students[0].student_id : "",
+  venue_id: appData.venues && appData.venues[0] ? appData.venues[0].venue_id : "",
+  duration_min: "60",
+  must_schedule: "TRUE",
+  priority: "1",
+  shared_session_id: "",
+  booking_day: "",
+  booking_start: "",
+  booking_end: "",
+  booking_status: "",
+  booking_lock_level: "1",
 }));
 document.getElementById("addVenueButton").addEventListener("click", () => appendRow("venueTableBody", "venueRowTemplate", {
   venue_id: "",

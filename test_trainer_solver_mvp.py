@@ -233,6 +233,34 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertEqual("2026-05-04T19:00", by_lesson["lesson_b"].end_datetime)
 
     @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_required_shared_session_without_common_candidate_reports_clear_warning(self) -> None:
+        """Required shared lessons need at least one common time and venue candidate."""
+        request = solver.make_demo_request()
+        request = copy.deepcopy(request)
+        request.lessons[0] = solver.LessonRequest(
+            "lesson_alice",
+            "stu_alice",
+            "gym_a",
+            duration_min=60,
+            priority=2,
+            shared_session_id="couple_1",
+        )
+        request.lessons[1] = solver.LessonRequest(
+            "lesson_bob",
+            "stu_bob",
+            "gym_b",
+            duration_min=60,
+            priority=1,
+            shared_session_id="couple_1",
+        )
+
+        response = solver.solve_schedule(request)
+
+        self.assertEqual("INFEASIBLE_INPUT", response.status)
+        self.assertIn("shared_session_id=couple_1", " ".join(response.warnings))
+        self.assertIn("no common time and venue", " ".join(response.warnings))
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
     def test_in_week_freeze_buffer_keeps_near_future_booking_fixed(self) -> None:
         """A confirmed lesson before freeze_before should be fixed even if it has alternatives."""
         request = solver.make_demo_request()
@@ -691,14 +719,57 @@ class TrainerSolverMvpTests(unittest.TestCase):
     def test_print_solution_cli_prints_table_and_writes_json(self) -> None:
         """--print-solution should print review rows while preserving JSON output."""
         with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
             output_path = Path(temp_dir) / "solution.json"
             stdout = io.StringIO()
+            shutil.copytree("csv_demo_input", input_dir)
+            schedule_web_app.save_lessons(
+                input_dir,
+                [
+                    {
+                        "lesson_id": "lesson_alice",
+                        "student_id": "stu_alice",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "2",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_bob",
+                        "student_id": "stu_bob",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_carol",
+                        "student_id": "stu_carol",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_david",
+                        "student_id": "stu_david",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                ],
+            )
 
             with contextlib.redirect_stdout(stdout):
                 csv_runner.main(
                     [
                         "--input",
-                        "csv_demo_input",
+                        str(input_dir),
                         "--output",
                         str(output_path),
                         "--print-solution",
@@ -902,6 +973,203 @@ class TrainerSolverMvpTests(unittest.TestCase):
 
             self.assertIn("Unknown default venue_id", raised.exception.errors[0]["message"])
 
+    def test_web_build_api_data_includes_lesson_rows_with_shared_session(self) -> None:
+        """The web payload should expose lessons for the Schedule Input lesson editor."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_test_input_shared_lessons", input_dir)
+
+            payload = schedule_web_app.build_api_data(input_dir, Path(temp_dir) / "missing.json")
+
+            self.assertIn("lesson_rows", payload)
+            shared_values = {row["shared_session_id"] for row in payload["lesson_rows"]}
+            self.assertIn("couple_anna_brian", shared_values)
+
+    def test_web_build_api_data_merges_lesson_booking_rows(self) -> None:
+        """Lesson rows should include editable booking time and status fields."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            payload = schedule_web_app.build_api_data(input_dir, Path(temp_dir) / "missing.json")
+
+            row_by_id = {row["lesson_id"]: row for row in payload["lesson_rows"]}
+            alice = row_by_id["lesson_alice"]
+            self.assertEqual("Mon", alice["booking_day"])
+            self.assertEqual("18:00", alice["booking_start"])
+            self.assertEqual("19:00", alice["booking_end"])
+            self.assertEqual("completed", alice["booking_status"])
+            self.assertEqual("TRUE", alice["booking_readonly"])
+
+    def test_web_save_lessons_writes_csv_rows(self) -> None:
+        """The lesson editor should rewrite lessons.csv with shared session data."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            result = schedule_web_app.save_lessons(
+                input_dir,
+                [
+                    {
+                        "lesson_id": "lesson_pair_a",
+                        "student_id": "stu_alice",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "2",
+                        "shared_session_id": "pair_a",
+                    }
+                ],
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertIn(
+                "lesson_pair_a,stu_alice,gym_a,60,TRUE,2,pair_a",
+                (input_dir / "lessons.csv").read_text(encoding="utf-8"),
+            )
+
+    def test_web_save_lessons_writes_booking_rows(self) -> None:
+        """Saving lesson times should rewrite existing_bookings.csv."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            result = schedule_web_app.save_lessons(
+                input_dir,
+                [
+                    {
+                        "lesson_id": "lesson_pair_a",
+                        "student_id": "stu_alice",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "2",
+                        "shared_session_id": "pair_a",
+                        "booking_day": "Fri",
+                        "booking_start": "19:00",
+                        "booking_status": "draft",
+                    }
+                ],
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(1, result["booking_rows"])
+            text = (input_dir / "existing_bookings.csv").read_text(encoding="utf-8")
+            self.assertIn("book_lesson_pair_a,lesson_pair_a,stu_alice,gym_a,2026-05-08T19:00:00,2026-05-08T20:00:00,draft,1", text)
+
+    def test_web_save_lessons_clears_booking_when_time_is_blank(self) -> None:
+        """Blank booking controls should remove the lesson's booking row."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            result = schedule_web_app.save_lessons(
+                input_dir,
+                [
+                    {
+                        "lesson_id": "lesson_alice",
+                        "student_id": "stu_alice",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "2",
+                        "shared_session_id": "",
+                        "booking_day": "",
+                        "booking_start": "",
+                        "booking_status": "",
+                    }
+                ],
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(0, result["booking_rows"])
+            self.assertEqual(
+                "booking_id,lesson_id,student_id,venue_id,start_datetime,end_datetime,status,lock_level\n",
+                (input_dir / "existing_bookings.csv").read_text(encoding="utf-8"),
+            )
+
+    def test_web_save_lessons_rejects_bad_rows_without_writing(self) -> None:
+        """Invalid lesson editor rows should not overwrite lessons.csv."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+            original = (input_dir / "lessons.csv").read_text(encoding="utf-8")
+
+            with self.assertRaises(schedule_web_app.WebInputError) as raised:
+                schedule_web_app.save_lessons(
+                    input_dir,
+                    [
+                        {
+                            "lesson_id": "lesson_bad",
+                            "student_id": "missing_student",
+                            "venue_id": "missing_venue",
+                            "duration_min": "0",
+                            "must_schedule": "maybe",
+                            "priority": "-1",
+                            "shared_session_id": "",
+                        }
+                    ],
+                )
+
+            messages = " ".join(error["message"] for error in raised.exception.errors)
+            self.assertIn("Unknown student_id", messages)
+            self.assertIn("Unknown venue_id", messages)
+            self.assertEqual(original, (input_dir / "lessons.csv").read_text(encoding="utf-8"))
+
+    def test_web_save_lessons_rejects_incomplete_booking(self) -> None:
+        """Booking day, start, and status must be saved together."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            with self.assertRaises(schedule_web_app.WebInputError) as raised:
+                schedule_web_app.save_lessons(
+                    input_dir,
+                    [
+                        {
+                            "lesson_id": "lesson_alice",
+                            "student_id": "stu_alice",
+                            "venue_id": "gym_a",
+                            "duration_min": "60",
+                            "must_schedule": "TRUE",
+                            "priority": "2",
+                            "shared_session_id": "",
+                            "booking_day": "Fri",
+                            "booking_start": "",
+                            "booking_status": "draft",
+                        }
+                    ],
+                )
+
+            self.assertIn("day, start, and status are required together", raised.exception.errors[0]["message"])
+
+    def test_web_save_lessons_rejects_fixed_time_edit_without_status_change(self) -> None:
+        """Completed or locked booking times cannot move unless status changes first."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            with self.assertRaises(schedule_web_app.WebInputError) as raised:
+                schedule_web_app.save_lessons(
+                    input_dir,
+                    [
+                        {
+                            "lesson_id": "lesson_alice",
+                            "student_id": "stu_alice",
+                            "venue_id": "gym_a",
+                            "duration_min": "60",
+                            "must_schedule": "TRUE",
+                            "priority": "2",
+                            "shared_session_id": "",
+                            "booking_day": "Fri",
+                            "booking_start": "19:00",
+                            "booking_status": "completed",
+                        }
+                    ],
+                )
+
+            self.assertIn("change fixed booking status", raised.exception.errors[0]["message"])
+
     def test_web_save_venues_and_travel_times_writes_csv_rows(self) -> None:
         """The web setup editor should rewrite venues.csv and travel_times.csv."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -924,6 +1192,29 @@ class TrainerSolverMvpTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertIn("gym_c,New Studio", (input_dir / "venues.csv").read_text(encoding="utf-8"))
             self.assertIn("gym_a,gym_c,35", (input_dir / "travel_times.csv").read_text(encoding="utf-8"))
+
+    def test_web_save_venues_accepts_home_as_commute_venue(self) -> None:
+        """Commute should work as a normal venue/travel row."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            result = schedule_web_app.save_venues_and_travel_times(
+                input_dir,
+                [
+                    {"venue_id": "gym_a", "venue_name": "Left Studio"},
+                    {"venue_id": "gym_b", "venue_name": "Right Studio"},
+                    {"venue_id": "home", "venue_name": "Home"},
+                ],
+                [
+                    {"from_venue_id": "home", "to_venue_id": "gym_a", "travel_min": "25"},
+                    {"from_venue_id": "gym_a", "to_venue_id": "home", "travel_min": "25"},
+                ],
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertIn("home,Home", (input_dir / "venues.csv").read_text(encoding="utf-8"))
+            self.assertIn("home,gym_a,25", (input_dir / "travel_times.csv").read_text(encoding="utf-8"))
 
     def test_web_save_venues_rejects_removing_referenced_venue(self) -> None:
         """Venue deletion should not leave existing scheduler input with missing references."""
@@ -1007,12 +1298,147 @@ class TrainerSolverMvpTests(unittest.TestCase):
             self.assertIn("Unsupported CSV file", raised.exception.errors[0]["message"])
 
     @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_web_evaluate_schedule_scores_solution_without_writing(self) -> None:
+        """Manual schedule evaluation should score placements without touching solution.json."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            output_path = Path(temp_dir) / "solution.json"
+            shutil.copytree("csv_demo_input", input_dir)
+            schedule_web_app.save_lessons(
+                input_dir,
+                [
+                    {
+                        "lesson_id": "lesson_alice",
+                        "student_id": "stu_alice",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "2",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_bob",
+                        "student_id": "stu_bob",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_carol",
+                        "student_id": "stu_carol",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_david",
+                        "student_id": "stu_david",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                ],
+            )
+            solved = schedule_web_app.run_solver(input_dir, output_path)
+            before = output_path.read_text(encoding="utf-8")
+
+            result = schedule_web_app.evaluate_schedule(input_dir, solved["solution"]["schedule"])
+
+            self.assertTrue(result["ok"])
+            self.assertIsInstance(result["score"], int)
+            self.assertEqual(before, output_path.read_text(encoding="utf-8"))
+
+    def test_web_evaluate_schedule_reports_manual_conflicts(self) -> None:
+        """Evaluator diagnostics should report invalid manual schedule placements."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_test_input_shared_lessons", input_dir)
+
+            result = schedule_web_app.evaluate_schedule(
+                input_dir,
+                [
+                    {
+                        "lesson_id": "lesson_anna",
+                        "start_datetime": "2026-05-04T09:00",
+                        "end_datetime": "2026-05-04T10:30",
+                        "venue_id": "jianguo",
+                        "shared_session_id": "couple_anna_brian",
+                    },
+                    {
+                        "lesson_id": "lesson_brian",
+                        "start_datetime": "2026-05-04T11:00",
+                        "end_datetime": "2026-05-04T12:30",
+                        "venue_id": "jianguo",
+                        "shared_session_id": "couple_anna_brian",
+                    },
+                    {
+                        "lesson_id": "lesson_cindy",
+                        "start_datetime": "2026-05-04T09:30",
+                        "end_datetime": "2026-05-04T10:30",
+                        "venue_id": "fengshan",
+                        "shared_session_id": "",
+                    },
+                ],
+            )
+
+            diagnostics = " ".join(result["diagnostics"])
+            self.assertIn("overlapping lessons", diagnostics)
+            self.assertIn("shared lessons must use the same time and venue", diagnostics)
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
     def test_web_run_solver_returns_solution_shape(self) -> None:
         """The web backend solve helper should write and return solver output."""
         with tempfile.TemporaryDirectory() as temp_dir:
             input_dir = Path(temp_dir) / "input"
             output_path = Path(temp_dir) / "solution.json"
             shutil.copytree("csv_demo_input", input_dir)
+            schedule_web_app.save_lessons(
+                input_dir,
+                [
+                    {
+                        "lesson_id": "lesson_alice",
+                        "student_id": "stu_alice",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "2",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_bob",
+                        "student_id": "stu_bob",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_carol",
+                        "student_id": "stu_carol",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_david",
+                        "student_id": "stu_david",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                ],
+            )
 
             result = schedule_web_app.run_solver(input_dir, output_path)
 
@@ -1022,12 +1448,153 @@ class TrainerSolverMvpTests(unittest.TestCase):
             self.assertGreater(len(result["solution"]["schedule"]), 0)
 
     @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_web_run_solver_does_not_overwrite_solution_when_infeasible(self) -> None:
+        """A failed web solve should leave the last visible solution on disk."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            output_path = Path(temp_dir) / "solution.json"
+            shutil.copytree("csv_demo_input", input_dir)
+            schedule_web_app.save_lessons(
+                input_dir,
+                [
+                    {
+                        "lesson_id": "lesson_alice",
+                        "student_id": "stu_alice",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "2",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_bob",
+                        "student_id": "stu_bob",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_carol",
+                        "student_id": "stu_carol",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_david",
+                        "student_id": "stu_david",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                ],
+            )
+            good_result = schedule_web_app.run_solver(input_dir, output_path)
+            before = output_path.read_text(encoding="utf-8")
+
+            schedule_web_app.save_lessons(
+                input_dir,
+                [
+                    {
+                        "lesson_id": "lesson_alice",
+                        "student_id": "stu_alice",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "2",
+                        "shared_session_id": "couple_1",
+                    },
+                    {
+                        "lesson_id": "lesson_bob",
+                        "student_id": "stu_bob",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "couple_1",
+                    },
+                    {
+                        "lesson_id": "lesson_carol",
+                        "student_id": "stu_carol",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_david",
+                        "student_id": "stu_david",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                ],
+            )
+
+            bad_result = schedule_web_app.run_solver(input_dir, output_path)
+
+            self.assertTrue(good_result["ok"])
+            self.assertFalse(bad_result["ok"])
+            self.assertIn("no common time and venue", " ".join(bad_result["validation_warnings"]))
+            self.assertEqual(before, output_path.read_text(encoding="utf-8"))
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
     def test_web_api_data_includes_solution_for_calendar_grid(self) -> None:
         """The data payload should include enough solved rows for the weekly grid."""
         with tempfile.TemporaryDirectory() as temp_dir:
             input_dir = Path(temp_dir) / "input"
             output_path = Path(temp_dir) / "solution.json"
             shutil.copytree("csv_demo_input", input_dir)
+            schedule_web_app.save_lessons(
+                input_dir,
+                [
+                    {
+                        "lesson_id": "lesson_alice",
+                        "student_id": "stu_alice",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "2",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_bob",
+                        "student_id": "stu_bob",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_carol",
+                        "student_id": "stu_carol",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                    {
+                        "lesson_id": "lesson_david",
+                        "student_id": "stu_david",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                    },
+                ],
+            )
             schedule_web_app.run_solver(input_dir, output_path)
 
             payload = schedule_web_app.build_api_data(input_dir, output_path)
@@ -1036,6 +1603,34 @@ class TrainerSolverMvpTests(unittest.TestCase):
             self.assertIn("lessons", payload)
             self.assertIn("coach_availability", payload)
             self.assertGreater(len(payload["solution"]["schedule"]), 0)
+
+    def test_web_static_exposes_manual_schedule_controls(self) -> None:
+        """The static UI should include manual schedule controls and lesson editor hooks."""
+        html = Path("schedule_web_static/index.html").read_text(encoding="utf-8")
+        script = Path("schedule_web_static/app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("saveButton", html)
+        self.assertIn('data-view="students"', html)
+        self.assertIn('data-view="lessons"', html)
+        self.assertIn("saveStudentsButton", html)
+        self.assertIn("saveLessonsButton", html)
+        self.assertIn("saveVenuesButton", html)
+        self.assertIn("saveTrainerButton", html)
+        self.assertIn("resetScheduleButton", html)
+        self.assertIn("lessonTableBody", html)
+        self.assertIn("shared_session_id", html)
+        self.assertIn("booking_day", html)
+        self.assertIn("booking_start", html)
+        self.assertIn("booking_status", html)
+        self.assertIn("/api/evaluate-schedule", script)
+        self.assertIn("draggable=\"true\"", script)
+        self.assertIn("saveStudents", script)
+        self.assertIn("saveLessons", script)
+        self.assertIn("updateLessonRowsFromSchedule", script)
+        self.assertIn("syncScheduleToCurrentInput", script)
+        self.assertIn("updated ${result.updatedCount} visible placement(s)", script)
+        self.assertIn("resized ${result.resizedCount} visible placement(s)", script)
+        self.assertIn('"lesson_id", "start_datetime", "end_datetime", "venue_id", "shared_session_id"', script)
 
 
 if __name__ == "__main__":

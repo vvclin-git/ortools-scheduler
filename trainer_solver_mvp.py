@@ -649,6 +649,39 @@ def candidates_have_same_shared_session_id(a: CandidateAssignment, b: CandidateA
     )
 
 
+def shared_candidate_key(candidate: CandidateAssignment) -> Tuple[datetime, datetime, str]:
+    return (candidate.start, candidate.end, candidate.venue_id)
+
+
+def find_required_shared_session_warnings(
+    lessons: List[LessonRequest],
+    candidates_by_lesson: Dict[str, List[CandidateAssignment]],
+) -> List[str]:
+    lessons_by_shared_id: Dict[str, List[LessonRequest]] = {}
+    for lesson in lessons:
+        if lesson.must_schedule and lesson.shared_session_id:
+            lessons_by_shared_id.setdefault(lesson.shared_session_id, []).append(lesson)
+
+    warnings: List[str] = []
+    for shared_session_id, shared_lessons in lessons_by_shared_id.items():
+        if len(shared_lessons) < 2:
+            continue
+        common_keys: Optional[set] = None
+        for lesson in shared_lessons:
+            keys = {
+                shared_candidate_key(candidate)
+                for candidate in candidates_by_lesson.get(lesson.lesson_id, [])
+            }
+            common_keys = keys if common_keys is None else common_keys & keys
+        if not common_keys:
+            lesson_ids = [lesson.lesson_id for lesson in shared_lessons]
+            warnings.append(
+                f"Required shared_session_id={shared_session_id} has no common time and venue "
+                f"candidate across lessons {lesson_ids}"
+            )
+    return warnings
+
+
 def solve_schedule(req: SolverRequest) -> SolverResponse:
     if cp_model is None:
         raise RuntimeError(
@@ -686,6 +719,16 @@ def solve_schedule(req: SolverRequest) -> SolverResponse:
             schedule=[],
             changes=[],
             warnings=warnings + [f"Required lessons have no candidates: {missing_required}"],
+        )
+
+    shared_session_warnings = find_required_shared_session_warnings(req.lessons, candidates_by_lesson)
+    if shared_session_warnings:
+        return SolverResponse(
+            status="INFEASIBLE_INPUT",
+            summary=SolverSummary(0, len(req.lessons), 0, 0, 0, None, candidate_count),
+            schedule=[],
+            changes=[],
+            warnings=warnings + shared_session_warnings,
         )
 
     model = cp_model.CpModel()

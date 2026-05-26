@@ -93,14 +93,64 @@ Run the local browser organizer:
 uv run python schedule_web_app.py --input csv_demo_input --output solution.json --port 8000
 ```
 
+On Windows, you can also double-click `run_web_app.cmd` from the project
+folder, or run it from PowerShell:
+
+```powershell
+.\run_web_app.cmd
+```
+
 Then open `http://127.0.0.1:8000`. The organizer reads and writes the same CSV
-folder, lets you edit students, student availability, venues, venue travel
-times, and trainer timeslots in tables, runs the optimizer, and visualizes the
-solved schedule in a weekly grid.
+folder, runs the optimizer, and visualizes the schedule in a weekly grid.
+Inputs are split across pages with page-owned save actions:
+
+- `Students`: edit students, default venues, and student preference windows,
+  then click `Save Students`.
+- `Lessons`: edit lesson requests plus scheduled booking day, start, derived
+  end, and status, then click `Save Lessons`.
+- `Setup`: import CSV files, edit venues/travel, and edit trainer timeslots
+  with separate save buttons.
+
+The organizer also supports browser-local schedule review. Drag a scheduled
+session to another day or time to evaluate the manual placement immediately,
+review score and conflict diagnostics, reset back to the optimized solution, or
+export/import the visible schedule with a client-side placement CSV:
+
+```csv
+lesson_id,start_datetime,end_datetime,venue_id,shared_session_id
+```
+
+Manual organizer edits do not rewrite scheduler CSV input unless you separately
+save the Lessons page or import scheduler CSV files. Dragging a lesson updates
+the in-memory Lessons booking time; `Save Lessons` persists it to
+`existing_bookings.csv`.
+
+Lesson time and status fields are booking edits, not lesson request fields.
+Blank day/start/status means the lesson has no current booking row. When set,
+the UI writes one booking row per lesson, using `book_<lesson_id>` for new
+bookings. The status options shown in the app are `draft`, `confirmed`,
+`completed`, and `locked`; completed and locked rows keep their time fixed
+until the status is changed.
+
+After a successful optimizer run, scheduled solution times are loaded into the
+Lessons page as unsaved `draft` booking times. Review or edit them, then click
+`Save Lessons` to persist them to `existing_bookings.csv`.
+
+When lesson input changes affect duration, `Save Lessons` updates the visible
+organizer placements to match the current `duration_min` values before
+evaluation. Run the optimizer again when you want the solver to choose new
+times for the changed lesson lengths.
+
+Shared lessons must have the same `shared_session_id`, venue, start time, and
+end time. Each student in the shared session still needs a preference window
+that covers that exact slot; otherwise the optimizer reports that the shared
+session has no common time and venue candidate.
 
 The setup page also accepts direct CSV uploads for the scheduler input files,
 including `students.csv`, `preferences.csv`, `coach_availability.csv`,
 `venues.csv`, `travel_times.csv`, `lessons.csv`, and the optional CSV files.
+For trainer commute time, add a normal venue such as `home` and enter
+`home -> venue` and `venue -> home` rows in the venue travel-time table.
 
 ## CSV Input
 

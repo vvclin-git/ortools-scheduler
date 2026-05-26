@@ -13,7 +13,6 @@
         <p id="statusText">Loading schedule data...</p>
       </div>
       <div class="header-actions">
-        <button id="saveButton" type="button">Save Input</button>
         <button id="solveButton" type="button">Run Optimizer</button>
       </div>
     </header>
@@ -23,19 +22,34 @@
 
       <nav class="tabs" aria-label="Schedule views">
         <button class="tab active" type="button" data-view="organizer">Organizer</button>
-        <button class="tab" type="button" data-view="input">Schedule Input</button>
+        <button class="tab" type="button" data-view="students">Students</button>
+        <button class="tab" type="button" data-view="lessons">Lessons</button>
         <button class="tab" type="button" data-view="setup">Setup</button>
       </nav>
 
       <section id="organizerView" class="view active" aria-label="Weekly organizer">
+        <div class="section-actions">
+          <h2>Weekly Organizer</h2>
+          <div class="button-row">
+            <button id="resetScheduleButton" class="secondary" type="button">Reset</button>
+            <button id="exportScheduleButton" class="secondary" type="button">Export Schedule CSV</button>
+            <button id="importScheduleButton" class="secondary" type="button">Import Schedule CSV</button>
+            <input id="scheduleCsvInput" class="visually-hidden" type="file" accept=".csv,text/csv">
+          </div>
+        </div>
         <div class="calendar-shell">
           <div id="calendarGrid" class="calendar-grid"></div>
         </div>
+        <pre id="diagnosticText" class="diagnostic-text">No diagnostics yet.</pre>
       </section>
 
-      <section id="inputView" class="view" aria-label="Student availability input">
+      <section id="studentsView" class="view" aria-label="Student availability input">
         <div class="section-actions">
-          <button id="addStudentButton" class="secondary" type="button">Add Student</button>
+          <h2>Students</h2>
+          <div class="button-row">
+            <button id="addStudentButton" class="secondary" type="button">Add Student</button>
+            <button id="saveStudentsButton" type="button">Save Students</button>
+          </div>
         </div>
         <div class="input-table-wrap">
           <table class="input-table">
@@ -49,6 +63,37 @@
               </tr>
             </thead>
             <tbody id="studentTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="lessonsView" class="view" aria-label="Lesson and booking input">
+        <div class="section-actions">
+          <h2>Lessons</h2>
+          <div class="button-row">
+            <button id="addLessonButton" class="secondary" type="button">Add Lesson</button>
+            <button id="saveLessonsButton" type="button">Save Lessons</button>
+          </div>
+        </div>
+        <div class="input-table-wrap">
+          <table class="input-table">
+            <thead>
+              <tr>
+                <th>lesson_id</th>
+                <th>student_id</th>
+                <th>venue_id</th>
+                <th>duration_min</th>
+                <th>must_schedule</th>
+                <th>priority</th>
+                <th>shared_session_id</th>
+                <th>day</th>
+                <th>start</th>
+                <th>end</th>
+                <th>status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="lessonTableBody"></tbody>
           </table>
         </div>
       </section>
@@ -68,7 +113,10 @@
           <section>
             <div class="section-actions">
               <h2>Venues</h2>
-              <button id="addVenueButton" class="secondary" type="button">Add Venue</button>
+              <div class="button-row">
+                <button id="addVenueButton" class="secondary" type="button">Add Venue</button>
+                <button id="saveVenuesButton" type="button">Save Venues & Travel</button>
+              </div>
             </div>
             <div class="input-table-wrap">
               <table class="input-table compact">
@@ -89,6 +137,7 @@
               <h2>Venue Travel Time</h2>
               <button id="addTravelButton" class="secondary" type="button">Add Travel</button>
             </div>
+            <p class="section-note">Use a normal venue such as home for commute travel rows.</p>
             <div class="input-table-wrap">
               <table class="input-table compact">
                 <thead>
@@ -107,7 +156,10 @@
           <section>
             <div class="section-actions">
               <h2>Trainer Timeslots</h2>
-              <button id="addTrainerButton" class="secondary" type="button">Add Timeslot</button>
+              <div class="button-row">
+                <button id="addTrainerButton" class="secondary" type="button">Add Timeslot</button>
+                <button id="saveTrainerButton" type="button">Save Trainer Timeslots</button>
+              </div>
             </div>
             <div class="input-table-wrap">
               <table class="input-table compact">
@@ -133,8 +185,49 @@
         <td><input data-field="student_id" spellcheck="false"></td>
         <td><input data-field="student_name"></td>
         <td><textarea data-field="available_timeslots" rows="2" spellcheck="false" placeholder="Mon 18:00-21:00 preferred 100; Wed 19:00-21:00 acceptable 60"></textarea></td>
-        <td><input data-field="venues" spellcheck="false" placeholder="default=gym_a"></td>
+        <td><select data-field="venues"></select></td>
         <td><button class="icon-button remove-row" type="button" aria-label="Remove student">Remove</button></td>
+      </tr>
+    </template>
+
+    <template id="lessonRowTemplate">
+      <tr>
+        <td><input data-field="lesson_id" spellcheck="false" placeholder="lesson_alice"></td>
+        <td><select data-field="student_id"></select></td>
+        <td><select data-field="venue_id"></select></td>
+        <td><input data-field="duration_min" inputmode="numeric" spellcheck="false" placeholder="60"></td>
+        <td>
+          <select data-field="must_schedule">
+            <option value="TRUE">TRUE</option>
+            <option value="FALSE">FALSE</option>
+          </select>
+        </td>
+        <td><input data-field="priority" inputmode="numeric" spellcheck="false" placeholder="1"></td>
+        <td><input data-field="shared_session_id" spellcheck="false" placeholder="couple_lee"></td>
+        <td>
+          <select data-field="booking_day" data-booking-control="true">
+            <option value=""></option>
+            <option>Mon</option>
+            <option>Tue</option>
+            <option>Wed</option>
+            <option>Thu</option>
+            <option>Fri</option>
+            <option>Sat</option>
+            <option>Sun</option>
+          </select>
+        </td>
+        <td><input data-field="booking_start" data-booking-control="true" spellcheck="false" placeholder="19:00"></td>
+        <td><input data-field="booking_end" readonly spellcheck="false"></td>
+        <td>
+          <select data-field="booking_status">
+            <option value=""></option>
+            <option value="draft">draft</option>
+            <option value="confirmed">confirmed</option>
+            <option value="completed">completed</option>
+            <option value="locked">locked</option>
+          </select>
+        </td>
+        <td><button class="icon-button remove-row" type="button" aria-label="Remove lesson">Remove</button></td>
       </tr>
     </template>
 

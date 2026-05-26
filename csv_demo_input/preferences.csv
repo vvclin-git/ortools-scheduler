@@ -1,6 +1,7 @@
 student_id,day,start,end,level,score
 stu_alice,Mon,18:00,21:00,preferred,100
 stu_alice,Wed,19:00,21:00,acceptable,40
+stu_alice,Fri,19:00,21:00,acceptable,30
 stu_bob,Thu,19:00,21:00,preferred,100
 stu_bob,Fri,19:00,21:00,acceptable,60
 stu_carol,Thu,20:00,22:00,preferred,100

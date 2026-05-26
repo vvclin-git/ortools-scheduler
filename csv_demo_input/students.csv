@@ -1,5 +1,6 @@
 student_id,name,default_venue_id,priority
 stu_alice,Alice,gym_a,2
-stu_bob,Bob,gym_b,1
+stu_bob,Bob,gym_a,1
 stu_carol,Carol,gym_b,1
 stu_david,David,gym_a,1
+stu_wang,Wang,gym_a,1

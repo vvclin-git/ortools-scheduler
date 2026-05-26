@@ -8,12 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Split the browser organizer into Organizer, Students, Lessons, and Setup
+  pages with section-specific save actions.
+- Added editable lesson booking day, start, derived end, and status controls
+  backed by `existing_bookings.csv`.
+- Added browser-local drag-and-drop schedule editing with immediate manual
+  schedule evaluation, diagnostics, reset, and placement CSV import/export.
+- Added a lesson editor to the local browser organizer, including student and
+  venue dropdowns plus shared-session editing.
+- Added a read-only `/api/evaluate-schedule` endpoint for scoring manual
+  schedules without writing solver output.
+- Added `run_web_app.cmd` as a Windows shortcut for launching the local browser
+  schedule organizer with the demo CSV input.
 - Added a local browser schedule organizer with a standard-library Python web
   server, CSV-backed student availability editing, optimizer execution, and a
   weekly grid output view.
 - Added frontend editing for students, venues, venue travel times, and trainer
   timeslots.
 - Added frontend CSV import for supported scheduler input files.
+- Documented commute setup by modeling `home` as a normal venue in the existing
+  travel-time matrix.
 - Added `--print-solution` to print a compact terminal schedule and change
   table for quick review.
 - Added `--init-template` to generate a starter CSV input folder using the
@@ -28,6 +42,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Optimizer results now load into the Lessons page as unsaved draft booking
+  times so users can review before persisting them.
 - Added solver-side request validation for duplicate IDs, missing references,
   invalid planning windows, invalid durations, bad day/time values, unknown
   booking or absence values, and negative travel times.
@@ -42,6 +58,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Organizer drag-and-drop now updates the in-memory Lessons booking time and
+  waits for `Save Lessons` before writing `existing_bookings.csv`.
+- Made the browser organizer apply current lesson input details to visible
+  placements after saving, including venue, student, shared-session, and
+  duration changes.
+- Prevented failed web optimizer runs from overwriting the last usable
+  `solution.json` with an empty infeasible schedule.
+- Added a clearer infeasible-input warning when required shared lessons have no
+  common time and venue candidate.
+- Updated the browser organizer to resize visible schedule placements to the
+  current lesson durations after input saves or resets, avoiding stale
+  `solution.json` block lengths after `duration_min` edits.
 - Fixed fixed/frozen bookings being forced into the model without first
   checking planning horizon, coach availability, absence conflicts, and
   conflicts with other fixed bookings.
