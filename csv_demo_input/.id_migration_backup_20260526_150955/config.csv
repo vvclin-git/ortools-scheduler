@@ -6,6 +6,3 @@ slot_size_min,30
 max_solve_seconds,5.0
 freeze_now,2026-05-06T14:00:00
 freeze_buffer_hours,4
-preference_score_preferred,100
-preference_score_acceptable,60
-preference_score_last_resort,20

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import cgi
+import csv
 import json
 import re
+import shutil
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from http import HTTPStatus
@@ -51,14 +53,13 @@ DAY_LIST = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 VISIBLE_BOOKING_STATUSES = {"draft", "confirmed", "completed", "locked"}
 ACCEPTED_BOOKING_STATUSES = {*VISIBLE_BOOKING_STATUSES, "in_progress"}
 FIXED_UI_BOOKING_STATUSES = {"completed", "locked", "in_progress"}
+DEFAULT_PREFERENCE_SCORES = {"preferred": 100, "acceptable": 60, "last_resort": 20}
+STUDENT_HEADERS = ["student_id", "name", "default_venue_id", "priority", "lessons_per_week"]
 LESSON_HEADERS = ["lesson_id", "student_id", "venue_id", "duration_min", "must_schedule", "priority", "shared_session_id"]
 BOOKING_HEADERS = ["booking_id", "lesson_id", "student_id", "venue_id", "start_datetime", "end_datetime", "status", "lock_level"]
-TIMESLOT_RE = re.compile(
-    r"^(?P<day>Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+"
-    r"(?P<start>\d{2}:\d{2})-(?P<end>\d{2}:\d{2})\s+"
-    r"(?P<level>[A-Za-z_][A-Za-z0-9_-]*)\s+"
-    r"(?P<score>-?\d+)$"
-)
+DAY_SPEC_RE = re.compile(r"^(?P<start>Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?:-(?P<end>Mon|Tue|Wed|Thu|Fri|Sat|Sun))?$")
+TIME_RANGE_RE = re.compile(r"^(?P<start>\d{1,2}:?\d{2})-(?P<end>\d{1,2}:?\d{2})$")
+LEVEL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 DEFAULT_VENUE_RE = re.compile(r"^default=(?P<venue_id>[A-Za-z0-9_.:-]+)$")
 STATIC_DIR = Path(__file__).with_name("schedule_web_static")
 IMPORTABLE_FILES = set(REQUIRED_FILES + OPTIONAL_FILES)
@@ -85,39 +86,156 @@ def parse_time_to_minutes(value: str) -> int:
     return hour * 60 + minute
 
 
-def parse_timeslot_string(student_id: str, value: str) -> List[StudentPreference]:
+def normalize_time_text(value: str) -> str:
+    """Normalize compact HHMM or H:MM text to HH:MM."""
+    text = value.strip()
+    if ":" in text:
+        hour_text, minute_text = text.split(":", 1)
+    elif len(text) in {3, 4} and text.isdigit():
+        hour_text, minute_text = text[:-2], text[-2:]
+    else:
+        raise ValueError(f"Invalid time {value!r}")
+    hour = int(hour_text)
+    minute = int(minute_text)
+    normalized = f"{hour:02d}:{minute:02d}"
+    parse_time_to_minutes(normalized)
+    return normalized
+
+
+def expand_day_spec(value: str, slot_index: int) -> List[str]:
+    """Expand Mon or Mon-Fri into ordered weekday names."""
+    match = DAY_SPEC_RE.match(value)
+    if not match:
+        raise ValueError(f"Slot {slot_index} has invalid day or day range {value!r}")
+    start_index = DAY_LIST.index(match.group("start"))
+    end_day = match.group("end")
+    if not end_day:
+        return [match.group("start")]
+    end_index = DAY_LIST.index(end_day)
+    if end_index < start_index:
+        raise ValueError(f"Slot {slot_index} day range must run forward within the week")
+    return DAY_LIST[start_index:end_index + 1]
+
+
+def load_preference_score_map(input_dir: Path) -> Dict[str, int]:
+    """Load web preference level scores from config.csv with defaults."""
+    scores = dict(DEFAULT_PREFERENCE_SCORES)
+    rows = read_csv_rows(input_dir / "config.csv")
+    for row in rows:
+        key = row.get("key", "")
+        if not key.startswith("preference_score_"):
+            continue
+        level = key.removeprefix("preference_score_").strip()
+        value = row.get("value", "").strip()
+        if level and value:
+            scores[level] = int(value)
+    return scores
+
+
+def build_preference_score_rows(input_dir: Path) -> List[Dict[str, str]]:
+    """Build editable preference score rows for the Setup page."""
+    return [
+        {"level": level, "score": str(score)}
+        for level, score in sorted(load_preference_score_map(input_dir).items())
+    ]
+
+
+def score_for_level(level: str, explicit_score: Optional[int], score_map: Dict[str, int], slot_index: int) -> int:
+    """Resolve the numeric solver score for a preference level."""
+    if level in score_map:
+        return score_map[level]
+    if explicit_score is not None:
+        return explicit_score
+    raise ValueError(f"Slot {slot_index} uses unknown level {level!r}; add it in Setup or provide an explicit score")
+
+
+def parse_timeslot_string(
+    student_id: str,
+    value: str,
+    score_map: Optional[Dict[str, int]] = None,
+    trainer_availability: Optional[List[Any]] = None,
+) -> List[StudentPreference]:
     """Parse compact weekly availability into preference rows."""
     text = value.strip()
+    scores = score_map or dict(DEFAULT_PREFERENCE_SCORES)
+    trainer_by_day: Dict[str, List[Any]] = {}
+    for window in trainer_availability or []:
+        trainer_by_day.setdefault(window.day, []).append(window)
+
     if not text:
-        return []
+        if not trainer_availability:
+            raise ValueError("Blank preferences require at least one trainer timeslot")
+        return [
+            StudentPreference(
+                student_id=student_id,
+                day=window.day,
+                start=window.start,
+                end=window.end,
+                level="preferred",
+                score=scores["preferred"],
+            )
+            for window in trainer_availability
+        ]
 
     preferences: List[StudentPreference] = []
     for index, part in enumerate(text.split(";"), start=1):
         item = part.strip()
         if not item:
             continue
-        match = TIMESLOT_RE.match(item)
-        if not match:
+        tokens = item.split()
+        if not tokens:
+            continue
+        days = expand_day_spec(tokens[0], index)
+        time_range = None
+        level = "preferred"
+        explicit_score: Optional[int] = None
+
+        token_index = 1
+        if token_index < len(tokens) and TIME_RANGE_RE.match(tokens[token_index]):
+            time_range = TIME_RANGE_RE.match(tokens[token_index])
+            token_index += 1
+        if token_index < len(tokens):
+            level = tokens[token_index]
+            if not LEVEL_RE.match(level):
+                raise ValueError(f"Slot {index} has invalid level {level!r}")
+            token_index += 1
+        if token_index < len(tokens):
+            try:
+                explicit_score = int(tokens[token_index])
+            except ValueError as exc:
+                raise ValueError(f"Slot {index} score must be an integer") from exc
+            token_index += 1
+        if token_index != len(tokens):
+            raise ValueError(f"Slot {index} has too many parts")
+
+        score = score_for_level(level, explicit_score, scores, index)
+        if time_range:
+            start = normalize_time_text(time_range.group("start"))
+            end = normalize_time_text(time_range.group("end"))
+            if parse_time_to_minutes(start) >= parse_time_to_minutes(end):
+                raise ValueError(f"Slot {index} start must be before end")
+            for day in days:
+                preferences.append(StudentPreference(student_id, day, start, end, level, score))
+            continue
+
+        added = 0
+        for day in days:
+            for window in trainer_by_day.get(day, []):
+                preferences.append(
+                    StudentPreference(
+                        student_id=student_id,
+                        day=day,
+                        start=window.start,
+                        end=window.end,
+                        level=level,
+                        score=score,
+                    )
+                )
+                added += 1
+        if not added:
             raise ValueError(
-                f"Slot {index} must look like 'Mon 18:00-21:00 preferred 100'"
+                f"Slot {index} did not match any trainer timeslots; add a time range or trainer availability"
             )
-        day = match.group("day")
-        start = match.group("start")
-        end = match.group("end")
-        if day not in DAYS:
-            raise ValueError(f"Slot {index} has invalid day {day!r}")
-        if parse_time_to_minutes(start) >= parse_time_to_minutes(end):
-            raise ValueError(f"Slot {index} start must be before end")
-        preferences.append(
-            StudentPreference(
-                student_id=student_id,
-                day=day,
-                start=start,
-                end=end,
-                level=match.group("level"),
-                score=int(match.group("score")),
-            )
-        )
     return preferences
 
 
@@ -180,6 +298,118 @@ def write_csv_rows(path: Path, headers: List[str], rows: List[Dict[str, str]]) -
         write_csv(path, rows)
         return
     path.write_text(",".join(headers) + "\n", encoding="utf-8", newline="")
+
+
+def read_csv_rows(path: Path, required: bool = True) -> List[Dict[str, str]]:
+    """Read CSV rows for web-only maintenance tasks."""
+    if not path.exists():
+        if required:
+            raise CsvInputError(f"Missing CSV file: {path}")
+        return []
+    with path.open("r", encoding="utf-8-sig", newline="") as file:
+        return [dict(row) for row in csv.DictReader(file)]
+
+
+def is_numeric_student_id(value: str) -> bool:
+    return bool(re.fullmatch(r"\d+", value or ""))
+
+
+def is_numeric_lesson_id(value: str, student_ids: set[str]) -> bool:
+    match = re.fullmatch(r"(\d+)-(\d+)", value or "")
+    return bool(match and match.group(1) in student_ids)
+
+
+def needs_numeric_id_migration(input_dir: Path) -> bool:
+    """Return true if scheduler input still contains old-style student or lesson IDs."""
+    student_rows = read_csv_rows(input_dir / "students.csv")
+    lesson_rows = read_csv_rows(input_dir / "lessons.csv")
+    student_ids = {row.get("student_id", "") for row in student_rows}
+    return any(not is_numeric_student_id(item) for item in student_ids) or any(
+        not is_numeric_lesson_id(row.get("lesson_id", ""), student_ids)
+        for row in lesson_rows
+    )
+
+
+def backup_scheduler_files(input_dir: Path, output_path: Path) -> Path:
+    """Copy active scheduler files before an automatic ID rewrite."""
+    backup_dir = input_dir / f".id_migration_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    suffix = 1
+    while backup_dir.exists():
+        backup_dir = input_dir / f".id_migration_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{suffix}"
+        suffix += 1
+    backup_dir.mkdir(parents=True)
+    for file_name in REQUIRED_FILES + OPTIONAL_FILES:
+        source = input_dir / file_name
+        if source.exists():
+            shutil.copy2(source, backup_dir / file_name)
+    if output_path.exists():
+        shutil.copy2(output_path, backup_dir / output_path.name)
+    return backup_dir
+
+
+def normalize_solution_ids(output_path: Path, student_id_map: Dict[str, str], lesson_id_map: Dict[str, str]) -> None:
+    """Rewrite known ID references inside solution.json if it exists."""
+    if not output_path.exists():
+        return
+    with output_path.open("r", encoding="utf-8-sig") as file:
+        payload = json.load(file)
+    for collection_name in ("schedule", "changes"):
+        for item in payload.get(collection_name, []) or []:
+            if item.get("student_id") in student_id_map:
+                item["student_id"] = student_id_map[item["student_id"]]
+            if item.get("lesson_id") in lesson_id_map:
+                item["lesson_id"] = lesson_id_map[item["lesson_id"]]
+    write_json(output_path, payload)
+
+
+def normalize_numeric_ids(input_dir: Path, output_path: Path) -> Dict[str, Any]:
+    """Migrate old-style CSV IDs to stable numeric student and lesson IDs."""
+    if not needs_numeric_id_migration(input_dir):
+        return {"changed": False, "backup_dir": ""}
+
+    backup_dir = backup_scheduler_files(input_dir, output_path)
+    student_rows = read_csv_rows(input_dir / "students.csv")
+    lesson_rows = read_csv_rows(input_dir / "lessons.csv")
+    preference_rows = read_csv_rows(input_dir / "preferences.csv")
+    booking_rows = read_csv_rows(input_dir / "existing_bookings.csv", required=False)
+    absence_rows = read_csv_rows(input_dir / "absences.csv", required=False)
+
+    student_id_map = {
+        row.get("student_id", ""): str(1001 + index)
+        for index, row in enumerate(student_rows)
+    }
+    lesson_counter_by_student: Dict[str, int] = {}
+    lesson_id_map: Dict[str, str] = {}
+    for row in lesson_rows:
+        old_student_id = row.get("student_id", "")
+        new_student_id = student_id_map.get(old_student_id, old_student_id)
+        lesson_counter_by_student[new_student_id] = lesson_counter_by_student.get(new_student_id, 0) + 1
+        lesson_id_map[row.get("lesson_id", "")] = f"{new_student_id}-{lesson_counter_by_student[new_student_id]}"
+
+    for row in student_rows:
+        row["student_id"] = student_id_map.get(row.get("student_id", ""), row.get("student_id", ""))
+        row.setdefault("lessons_per_week", "1")
+        row["lessons_per_week"] = row.get("lessons_per_week", "") or "1"
+    for row in preference_rows:
+        row["student_id"] = student_id_map.get(row.get("student_id", ""), row.get("student_id", ""))
+    for row in lesson_rows:
+        row["lesson_id"] = lesson_id_map.get(row.get("lesson_id", ""), row.get("lesson_id", ""))
+        row["student_id"] = student_id_map.get(row.get("student_id", ""), row.get("student_id", ""))
+    for row in booking_rows:
+        row["lesson_id"] = lesson_id_map.get(row.get("lesson_id", ""), row.get("lesson_id", ""))
+        row["student_id"] = student_id_map.get(row.get("student_id", ""), row.get("student_id", ""))
+        row["booking_id"] = f"book_{row['lesson_id']}"
+    for row in absence_rows:
+        if row.get("entity_type") == "student":
+            row["entity_id"] = student_id_map.get(row.get("entity_id", ""), row.get("entity_id", ""))
+
+    write_csv_rows(input_dir / "students.csv", STUDENT_HEADERS, student_rows)
+    write_csv_rows(input_dir / "preferences.csv", ["student_id", "day", "start", "end", "level", "score"], preference_rows)
+    write_csv_rows(input_dir / "lessons.csv", LESSON_HEADERS, lesson_rows)
+    write_csv_rows(input_dir / "existing_bookings.csv", BOOKING_HEADERS, booking_rows)
+    write_csv_rows(input_dir / "absences.csv", ["entity_type", "entity_id", "start_datetime", "end_datetime", "reason"], absence_rows)
+    normalize_solution_ids(output_path, student_id_map, lesson_id_map)
+    return {"changed": True, "backup_dir": str(backup_dir)}
 
 
 def import_csv_files(input_dir: Path, files: Dict[str, bytes]) -> Dict[str, Any]:
@@ -251,6 +481,7 @@ def build_table_rows(input_dir: Path) -> List[Dict[str, str]]:
         {
             "student_id": student.student_id,
             "student_name": student.name,
+            "lessons_per_week": str(student.lessons_per_week),
             "available_timeslots": format_timeslot_string(by_student.get(student.student_id, [])),
             "venues": f"default={student.default_venue_id}",
         }
@@ -344,6 +575,7 @@ def build_api_data(input_dir: Path, output_path: Path) -> Dict[str, Any]:
         "travel_time_rows": build_travel_time_rows(input_dir),
         "lesson_rows": build_lesson_rows(input_dir),
         "trainer_availability_rows": build_trainer_availability_rows(input_dir),
+        "preference_score_rows": build_preference_score_rows(input_dir),
         "students": [asdict(item) for item in load_students(input_dir)],
         "venues": [asdict(item) for item in load_venues(input_dir)],
         "travel_times": [asdict(item) for item in load_travel_times(input_dir)],
@@ -361,6 +593,8 @@ def validate_table_rows(input_dir: Path, rows: List[Dict[str, Any]]) -> Tuple[Li
     """Validate frontend table rows and return students/preferences CSV rows."""
     venue_ids = {venue.venue_id for venue in load_venues(input_dir)}
     existing_students = {student.student_id: student for student in load_students(input_dir)}
+    preference_scores = load_preference_score_map(input_dir)
+    trainer_availability = load_coach_availability(input_dir)
     errors: List[Dict[str, Any]] = []
     student_rows: List[Dict[str, str]] = []
     preference_rows: List[Dict[str, str]] = []
@@ -372,6 +606,7 @@ def validate_table_rows(input_dir: Path, rows: List[Dict[str, Any]]) -> Tuple[Li
     for row_index, raw in enumerate(rows, start=1):
         student_id = str(raw.get("student_id", "")).strip()
         student_name = str(raw.get("student_name", "")).strip()
+        lessons_per_week_text = str(raw.get("lessons_per_week", "1")).strip() or "1"
         timeslots = str(raw.get("available_timeslots", "")).strip()
         venues = str(raw.get("venues", "")).strip()
 
@@ -399,10 +634,17 @@ def validate_table_rows(input_dir: Path, rows: List[Dict[str, Any]]) -> Tuple[Li
             errors.append({"row": row_index, "field": "venues", "message": str(exc)})
 
         try:
-            parsed_preferences = parse_timeslot_string(student_id, timeslots)
+            parsed_preferences = parse_timeslot_string(student_id, timeslots, preference_scores, trainer_availability)
         except ValueError as exc:
             parsed_preferences = []
             errors.append({"row": row_index, "field": "available_timeslots", "message": str(exc)})
+        try:
+            lessons_per_week = int(lessons_per_week_text)
+            if lessons_per_week < 0:
+                raise ValueError
+        except ValueError:
+            lessons_per_week = 1
+            errors.append({"row": row_index, "field": "lessons_per_week", "message": "lessons_per_week must be a non-negative integer"})
 
         existing = existing_students.get(student_id)
         student_rows.append(
@@ -411,6 +653,7 @@ def validate_table_rows(input_dir: Path, rows: List[Dict[str, Any]]) -> Tuple[Li
                 "name": student_name,
                 "default_venue_id": default_venue_id,
                 "priority": str(existing.priority if existing is not None else 1),
+                "lessons_per_week": str(lessons_per_week),
             }
         )
         for pref in parsed_preferences:
@@ -433,12 +676,55 @@ def validate_table_rows(input_dir: Path, rows: List[Dict[str, Any]]) -> Tuple[Li
 def save_student_preferences(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Validate and write students.csv and preferences.csv."""
     student_rows, preference_rows = validate_table_rows(input_dir, rows)
-    write_csv(input_dir / "students.csv", student_rows)
+    write_csv_rows(input_dir / "students.csv", STUDENT_HEADERS, student_rows)
     if preference_rows:
         write_csv(input_dir / "preferences.csv", preference_rows)
     else:
         write_csv_rows(input_dir / "preferences.csv", ["student_id", "day", "start", "end", "level", "score"], [])
     return {"ok": True, "saved_rows": len(student_rows), "preference_rows": len(preference_rows)}
+
+
+def validate_preference_score_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Validate editable preference level score rows."""
+    errors: List[Dict[str, Any]] = []
+    parsed_rows: List[Dict[str, str]] = []
+    seen_levels = set()
+    if not rows:
+        raise WebInputError([{"row": 0, "field": "preference_scores", "message": "At least one preference score is required"}])
+
+    for row_index, raw in enumerate(rows, start=1):
+        level = str(raw.get("level", "")).strip()
+        score_text = str(raw.get("score", "")).strip()
+        if not LEVEL_RE.match(level):
+            errors.append({"row": row_index, "field": "level", "message": "level must start with a letter or underscore"})
+            continue
+        if level in seen_levels:
+            errors.append({"row": row_index, "field": "level", "message": f"Duplicate level={level}"})
+            continue
+        seen_levels.add(level)
+        try:
+            score = int(score_text)
+        except ValueError:
+            score = 0
+            errors.append({"row": row_index, "field": "score", "message": "score must be an integer"})
+        parsed_rows.append({"level": level, "score": str(score)})
+
+    if "preferred" not in seen_levels:
+        errors.append({"row": 0, "field": "level", "message": "preferred level is required"})
+    if errors:
+        raise WebInputError(errors)
+    return parsed_rows
+
+
+def save_preference_scores(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Validate and write web preference score settings into config.csv."""
+    parsed_rows = validate_preference_score_rows(rows)
+    config_rows = read_csv_rows(input_dir / "config.csv")
+    score_keys = {f"preference_score_{row['level']}": row["score"] for row in parsed_rows}
+    retained = [row for row in config_rows if not row.get("key", "").startswith("preference_score_")]
+    retained.extend({"key": key, "value": value} for key, value in sorted(score_keys.items()))
+    write_csv_rows(input_dir / "config.csv", ["key", "value"], retained)
+    return {"ok": True, "preference_score_rows": len(parsed_rows)}
 
 
 def parse_web_bool(value: Any) -> bool:
@@ -959,6 +1245,12 @@ class ScheduleWebHandler(SimpleHTTPRequestHandler):
                     raise WebInputError([{"row": 0, "field": "rows", "message": "rows must be a list"}])
                 self.send_json(save_trainer_availability(self.input_dir, rows))
                 return
+            if parsed.path == "/api/preference-scores":
+                rows = payload.get("rows", [])
+                if not isinstance(rows, list):
+                    raise WebInputError([{"row": 0, "field": "rows", "message": "rows must be a list"}])
+                self.send_json(save_preference_scores(self.input_dir, rows))
+                return
             if parsed.path == "/api/solve":
                 self.send_json(run_solver(self.input_dir, self.output_path))
                 return
@@ -1040,11 +1332,14 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = parse_args(argv)
     input_dir = Path(args.input)
     output_path = Path(args.output)
+    migration = normalize_numeric_ids(input_dir, output_path)
     handler = build_handler(input_dir, output_path)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"serving=http://{args.host}:{args.port}")
     print(f"input={input_dir}")
     print(f"output={output_path}")
+    if migration["changed"]:
+        print(f"id_migration_backup={migration['backup_dir']}")
     server.serve_forever()
 
 

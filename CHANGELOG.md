@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Added `lessons_per_week` student planning metadata plus a Students-page
+  lesson generation workflow.
+- Added automatic web-app startup migration from text IDs to numeric student
+  and lesson IDs with timestamped CSV backups.
+- Added organizer lesson-block coloring and labels for booking statuses.
+- Added Setup preference score mapping for readable student preference levels.
+- Added flexible Students timeslot text with weekday ranges, compact times, and
+  trainer-timeslot expansion for weekday-only entries.
+- Added `last_resort` preference score defaults, blank-preference expansion from
+  trainer availability, Organizer `Save Lessons`, and three memory-only
+  temporary Organizer solution slots.
 - Split the browser organizer into Organizer, Students, Lessons, and Setup
   pages with section-specific save actions.
 - Added editable lesson booking day, start, derived end, and status controls

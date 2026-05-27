@@ -1,5 +1,10 @@
 lesson_id,student_id,venue_id,duration_min,must_schedule,priority,shared_session_id
-lesson_alice,stu_alice,gym_b,60,TRUE,2,couple_1
-lesson_bob,stu_bob,gym_b,60,TRUE,1,couple_1
-lesson_carol,stu_carol,gym_b,60,TRUE,1,
-lesson_david,stu_david,gym_a,60,TRUE,1,
+1001-1,1001,gym_b,60,TRUE,2,couple_1
+1002-1,1002,gym_b,60,TRUE,1,couple_1
+1003-1,1003,gym_b,60,TRUE,1,
+1004-1,1004,gym_a,60,TRUE,1,
+1005-1,1005,gym_a,60,TRUE,1,
+1006-1,1006,gym_b,60,TRUE,1,
+1007-1,1007,gym_b,60,TRUE,1,
+1008-1,1008,gym_a,60,TRUE,1,
+1009-1,1009,gym_a,60,TRUE,1,

@@ -69,6 +69,12 @@ button:hover {
   color: var(--accent-dark);
 }
 
+.temp-slot.filled {
+  background: #eaf7f3;
+  border-color: #287c71;
+  color: #1f6b61;
+}
+
 .icon-button {
   background: var(--panel);
   color: var(--accent);
@@ -239,6 +245,31 @@ h2 {
   background: #fff0ea;
 }
 
+.lesson-block.status-draft {
+  border-left-color: #d99b23;
+  background: #fff8e7;
+}
+
+.lesson-block.status-confirmed {
+  border-left-color: #287c71;
+  background: #eaf7f3;
+}
+
+.lesson-block.status-locked {
+  border-left-color: #6d4aff;
+  background: #f1edff;
+}
+
+.lesson-block.status-completed {
+  border-left-color: #667085;
+  background: #f2f4f7;
+}
+
+.lesson-block.status-in_progress {
+  border-left-color: #e56b2f;
+  background: #fff1e8;
+}
+
 .lesson-title {
   display: block;
   font-weight: 800;
@@ -246,6 +277,15 @@ h2 {
 
 .lesson-meta {
   color: var(--muted);
+}
+
+.lesson-status {
+  display: inline-block;
+  margin: 3px 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .input-table {

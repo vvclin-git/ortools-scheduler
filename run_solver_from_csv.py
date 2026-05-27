@@ -78,9 +78,12 @@ TEMPLATE_ROWS: Dict[str, List[Dict[str, str]]] = {
         {"key": "max_solve_seconds", "value": "5.0"},
         {"key": "freeze_now", "value": "2026-05-06T14:00:00"},
         {"key": "freeze_buffer_hours", "value": "4"},
+        {"key": "preference_score_preferred", "value": "100"},
+        {"key": "preference_score_acceptable", "value": "60"},
+        {"key": "preference_score_last_resort", "value": "20"},
     ],
     "students.csv": [
-        {"student_id": "stu_alice", "name": "王小明", "default_venue_id": "gym_a", "priority": "2"},
+        {"student_id": "stu_alice", "name": "王小明", "default_venue_id": "gym_a", "priority": "2", "lessons_per_week": "1"},
     ],
     "venues.csv": [
         {"venue_id": "gym_a", "name": "台北教室A"},
@@ -283,6 +286,7 @@ def load_students(input_dir: Path) -> List[Student]:
             name=require(row, "name", "students.csv"),
             default_venue_id=require(row, "default_venue_id", "students.csv"),
             priority=parse_int(row.get("priority", ""), 1),
+            lessons_per_week=parse_int(row.get("lessons_per_week", ""), 1),
         )
         for row in rows
     ]

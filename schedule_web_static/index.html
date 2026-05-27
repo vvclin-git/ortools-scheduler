@@ -31,7 +31,11 @@
         <div class="section-actions">
           <h2>Weekly Organizer</h2>
           <div class="button-row">
+            <button id="organizerSaveLessonsButton" type="button">Save Lessons</button>
             <button id="resetScheduleButton" class="secondary" type="button">Reset</button>
+            <button class="secondary temp-slot" type="button" data-temp-slot="0">Slot 1 empty</button>
+            <button class="secondary temp-slot" type="button" data-temp-slot="1">Slot 2 empty</button>
+            <button class="secondary temp-slot" type="button" data-temp-slot="2">Slot 3 empty</button>
             <button id="exportScheduleButton" class="secondary" type="button">Export Schedule CSV</button>
             <button id="importScheduleButton" class="secondary" type="button">Import Schedule CSV</button>
             <input id="scheduleCsvInput" class="visually-hidden" type="file" accept=".csv,text/csv">
@@ -48,6 +52,7 @@
           <h2>Students</h2>
           <div class="button-row">
             <button id="addStudentButton" class="secondary" type="button">Add Student</button>
+            <button id="generateLessonsButton" class="secondary" type="button">Generate Lessons</button>
             <button id="saveStudentsButton" type="button">Save Students</button>
           </div>
         </div>
@@ -57,6 +62,7 @@
               <tr>
                 <th>student_id</th>
                 <th>student_name</th>
+                <th>lessons_per_week</th>
                 <th>available_timeslots</th>
                 <th>venues</th>
                 <th></th>
@@ -176,6 +182,28 @@
               </table>
             </div>
           </section>
+
+          <section>
+            <div class="section-actions">
+              <h2>Preference Scores</h2>
+              <div class="button-row">
+                <button id="addPreferenceScoreButton" class="secondary" type="button">Add Level</button>
+                <button id="savePreferenceScoresButton" type="button">Save Preference Scores</button>
+              </div>
+            </div>
+            <div class="input-table-wrap">
+              <table class="input-table compact">
+                <thead>
+                  <tr>
+                    <th>level</th>
+                    <th>score</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="preferenceScoreTableBody"></tbody>
+              </table>
+            </div>
+          </section>
         </div>
       </section>
     </main>
@@ -184,7 +212,8 @@
       <tr>
         <td><input data-field="student_id" spellcheck="false"></td>
         <td><input data-field="student_name"></td>
-        <td><textarea data-field="available_timeslots" rows="2" spellcheck="false" placeholder="Mon 18:00-21:00 preferred 100; Wed 19:00-21:00 acceptable 60"></textarea></td>
+        <td><input data-field="lessons_per_week" inputmode="numeric" spellcheck="false" placeholder="1"></td>
+        <td><textarea data-field="available_timeslots" rows="2" spellcheck="false" placeholder="Mon-Fri 0900-1200 preferred; Fri acceptable; Sat"></textarea></td>
         <td><select data-field="venues"></select></td>
         <td><button class="icon-button remove-row" type="button" aria-label="Remove student">Remove</button></td>
       </tr>
@@ -265,6 +294,14 @@
         <td><input data-field="end" spellcheck="false" placeholder="22:00"></td>
         <td><input data-field="score" inputmode="numeric" spellcheck="false" placeholder="0"></td>
         <td><button class="icon-button remove-row" type="button" aria-label="Remove trainer timeslot">Remove</button></td>
+      </tr>
+    </template>
+
+    <template id="preferenceScoreRowTemplate">
+      <tr>
+        <td><input data-field="level" spellcheck="false" placeholder="preferred"></td>
+        <td><input data-field="score" inputmode="numeric" spellcheck="false" placeholder="100"></td>
+        <td><button class="icon-button remove-row" type="button" aria-label="Remove preference level">Remove</button></td>
       </tr>
     </template>
 

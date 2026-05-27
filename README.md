@@ -105,11 +105,19 @@ folder, runs the optimizer, and visualizes the schedule in a weekly grid.
 Inputs are split across pages with page-owned save actions:
 
 - `Students`: edit students, default venues, and student preference windows,
-  then click `Save Students`.
+  set `lessons_per_week`, then click `Save Students`.
 - `Lessons`: edit lesson requests plus scheduled booking day, start, derived
   end, and status, then click `Save Lessons`.
-- `Setup`: import CSV files, edit venues/travel, and edit trainer timeslots
-  with separate save buttons.
+- `Setup`: import CSV files, edit venues/travel, edit trainer timeslots, and
+  adjust preference level scores with separate save buttons.
+
+Student preference text can use readable levels without numeric scores. The
+Setup page maps levels such as `preferred` and `acceptable` to solver scores,
+defaulting to `100`, `60`, and `20` for `preferred`, `acceptable`, and
+`last_resort`. The Students page accepts compact forms such as
+`Mon-Fri 0900-1200 preferred`, `Mon 9:00-12:00 acceptable`, or `Fri`; blank
+preference text and weekday entries without an explicit time use the matching
+trainer timeslots as `preferred`.
 
 The organizer also supports browser-local schedule review. Drag a scheduled
 session to another day or time to evaluate the manual placement immediately,
@@ -121,9 +129,12 @@ lesson_id,start_datetime,end_datetime,venue_id,shared_session_id
 ```
 
 Manual organizer edits do not rewrite scheduler CSV input unless you separately
-save the Lessons page or import scheduler CSV files. Dragging a lesson updates
-the in-memory Lessons booking time; `Save Lessons` persists it to
-`existing_bookings.csv`.
+save the Lessons page, click `Save Lessons` in Organizer, or import scheduler
+CSV files. Dragging a lesson updates the in-memory Lessons booking time; either
+`Save Lessons` button persists it to `existing_bookings.csv`. The Organizer also
+has three memory-only temporary slots for live testing. Click an empty slot to
+save the current visible schedule; click a filled slot to switch back to it.
+Temporary slots are cleared by page refresh or app restart.
 
 Lesson time and status fields are booking edits, not lesson request fields.
 Blank day/start/status means the lesson has no current booking row. When set,
@@ -135,6 +146,18 @@ until the status is changed.
 After a successful optimizer run, scheduled solution times are loaded into the
 Lessons page as unsaved `draft` booking times. Review or edit them, then click
 `Save Lessons` to persist them to `existing_bookings.csv`.
+
+When the web app starts, it normalizes old text IDs into numeric CSV IDs. Student
+IDs become `1001`, `1002`, and so on; lesson IDs become values like `1001-1`.
+References in preferences, lessons, bookings, student absences, and
+`solution.json` are rewritten together. The app creates a timestamped
+`.id_migration_backup_...` folder before rewriting.
+
+The Students page can create lesson rows from each student's `lessons_per_week`
+plan. `Add Student` creates a numeric student row and one matching unscheduled
+lesson row immediately. `Generate Lessons` adds missing lesson rows until each
+student has the requested total count, then saves both Students and Lessons; it
+does not delete extra existing rows.
 
 When lesson input changes affect duration, `Save Lessons` updates the visible
 organizer placements to match the current `duration_min` values before

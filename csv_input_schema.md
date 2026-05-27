@@ -131,11 +131,23 @@ slot_size_min,30
 max_solve_seconds,5.0
 freeze_now,2026-05-06T14:00:00
 freeze_buffer_hours,4
+preference_score_preferred,100
+preference_score_acceptable,60
+preference_score_last_resort,20
 ```
+
+`preference_score_<level>` keys are used by the web app when saving Students.
+They convert readable preference levels such as `preferred` or `acceptable`
+into the numeric `score` values written to `preferences.csv`.
 
 ### students.csv
 
 Students who may receive lessons.
+
+The local web app normalizes student IDs to numeric values such as `1001` on
+startup. Lesson rows generated from student plans use IDs such as `1001-1`.
+Before automatic ID rewriting, the app creates a timestamped backup folder in
+the input directory.
 
 | column | required | example | meaning |
 |---|---:|---|---|
@@ -143,13 +155,14 @@ Students who may receive lessons.
 | `name` | yes | `王小明` | Display name in output. Traditional Chinese is supported. |
 | `default_venue_id` | yes | `gym_a` | Student's usual venue. Must exist in `venues.csv`. |
 | `priority` | no | `2` | Student priority for future use and data labeling. Defaults to `1`. |
+| `lessons_per_week` | no | `1` | Number of lesson rows the web app should maintain for this student. Defaults to `1`. |
 
 Example:
 
 ```csv
-student_id,name,default_venue_id,priority
-stu_alice,王小明,gym_a,2
-stu_bob,陳美華,gym_b,1
+student_id,name,default_venue_id,priority,lessons_per_week
+stu_alice,王小明,gym_a,2,1
+stu_bob,陳美華,gym_b,1,1
 ```
 
 ### venues.csv
@@ -231,10 +244,24 @@ only when the full lesson fits inside one of that student's preference windows.
 | `day` | yes | `Mon` | Weekly day name. |
 | `start` | yes | `18:00` | Window start time. |
 | `end` | yes | `21:00` | Window end time. Must be after `start`. |
-| `level` | yes | `preferred` | Label shown in output. Current solver uses `score` for ranking. |
-| `score` | yes | `100` | Numeric preference score. Higher is better. |
+| `level` | yes | `preferred` | Label shown in output. The web UI keeps this editable as text. |
+| `score` | yes | `100` | Numeric preference score used by the solver. Higher is better. In the web UI this is derived from Setup preference scores for known levels. |
 
-Use multiple rows per student if they have multiple possible windows.
+Use multiple rows per student if they have multiple possible windows. In the
+Students page, the compact preference text accepts these forms:
+
+- `Mon 18:00-21:00 preferred`
+- `Mon 9:00-12:00 acceptable`
+- `Mon-Fri 0900-1200 preferred`
+- `Fri acceptable`
+- `Sat`
+
+Weekday ranges expand into one row per day. Compact times such as `0900-1200`
+are normalized to `09:00-12:00`. If a day or day range has no explicit time, or
+if the field is left blank in the Students page, the web app expands it from
+matching trainer timeslots in `coach_availability.csv` and defaults to level
+`preferred`. Unknown levels must either be added in Setup preference scores or
+use legacy explicit score text such as `Mon 09:00-12:00 ideal 75`.
 
 Example:
 

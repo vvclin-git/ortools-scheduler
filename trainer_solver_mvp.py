@@ -39,6 +39,7 @@ class Student:
     name: str
     default_venue_id: str
     priority: int = 1
+    lessons_per_week: int = 1
 
 
 @dataclass(frozen=True)
