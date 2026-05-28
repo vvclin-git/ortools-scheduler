@@ -90,24 +90,25 @@ availability is prefixed with `[OUTSIDE AVAILABILITY]`.
 Run the local browser organizer:
 
 ```bash
-uv run python schedule_web_app.py --input csv_demo_input --output solution.json --port 8000
+uv run python schedule_web_app.py --input csv_demo_input --output solution.json --port 8001
 ```
 
 On Windows, you can also double-click `run_web_app.cmd` from the project
-folder, or run it from PowerShell:
+folder to start the app on port `8001` and open it in your default browser, or
+run it from PowerShell:
 
 ```powershell
 .\run_web_app.cmd
 ```
 
-Then open `http://127.0.0.1:8000`. The organizer reads and writes the same CSV
+Then open `http://127.0.0.1:8001`. The organizer reads and writes the same CSV
 folder, runs the optimizer, and visualizes the schedule in a weekly grid.
 Inputs are split across pages with page-owned save actions:
 
 - `Students`: edit students, default venues, and student preference windows,
-  set `lessons_per_week`, import `students.csv`/`preferences.csv` test files,
-  clear the visible student editor with `Clean Students`, then click
-  `Save Students`.
+  set `lessons_per_week` and optional `couple` grouping keys, import
+  `students.csv`/`preferences.csv` test files, clear the visible student editor
+  with `Clean Students`, then click `Save Students`.
 - `Lessons`: edit lesson requests plus scheduled booking day, start, derived
   end, and status, clear the visible lesson editor with `Clean Lessons`, then
   click `Save Lessons`.
@@ -126,6 +127,8 @@ trainer timeslots as `preferred`.
 
 The organizer also supports browser-local schedule review. Drag a scheduled
 session to another day or time to evaluate the manual placement immediately,
+drag unscheduled lessons from the tray into the calendar, switch the calendar
+background between trainer availability and selected-student preferences,
 review score and conflict diagnostics, reset back to the optimized solution, or
 export/import the visible schedule with the solver-readable booking CSV format:
 
@@ -144,8 +147,8 @@ cleared by page refresh or app restart.
 
 Frequently changed runtime config values are available on the Organizer:
 `mode`, `planning_start`, `planning_end`, and `freeze_now`. These visible values
-are used immediately by `Run Optimizer` without first writing `config.csv`.
-Click `Save Runtime Config` only when you want those values persisted.
+use date/time inputs, default to the current week, and are used immediately by
+`Run Optimizer` without writing `config.csv`.
 
 Lesson time and status fields are booking edits, not lesson request fields.
 Blank day/start/status means the lesson has no current booking row. When set,
@@ -153,6 +156,8 @@ the UI writes one booking row per lesson, using `book_<lesson_id>` for new
 bookings. The status options shown in the app are `draft`, `confirmed`,
 `completed`, and `locked`; completed and locked rows keep their time fixed
 until the status is changed.
+Organizer status changes on a selected scheduled block save immediately. Clean
+Schedule clears all booking times and saves the cleared lesson rows immediately.
 
 After a successful optimizer run, scheduled solution times are loaded into the
 Lessons page as unsaved `draft` booking times. Review or edit them, then click
@@ -177,7 +182,10 @@ The Students page can create lesson rows from each student's `lessons_per_week`
 plan. `Add Student` creates a numeric student row and one matching unscheduled
 lesson row immediately. `Generate Lessons` adds missing lesson rows until each
 student has the requested total count, then saves both Students and Lessons; it
-does not delete extra existing rows.
+does not delete extra existing rows. When two or more students share the same
+non-blank `couple` value, generated lesson rows use that value as
+`shared_session_id`. New lesson rows default to optional; use the Lessons page
+bulk buttons to mark all visible lessons required or optional.
 
 When lesson input changes affect duration, `Save Lessons` updates the visible
 organizer placements to match the current `duration_min` values before

@@ -882,7 +882,7 @@ class TrainerSolverMvpTests(unittest.TestCase):
                 {path.name for path in written},
             )
             self.assertEqual(
-                "student_id,name,default_venue_id,priority,lessons_per_week",
+                "student_id,name,default_venue_id,priority,lessons_per_week,couple",
                 (template_dir / "students.csv").read_text(encoding="utf-8").splitlines()[0],
             )
             self.assertEqual(
@@ -1067,6 +1067,7 @@ class TrainerSolverMvpTests(unittest.TestCase):
                         "student_id": "stu_alice",
                         "student_name": "Alice Updated",
                         "lessons_per_week": "2",
+                        "couple": "pair_a",
                         "available_timeslots": "Tue 10:00-12:00 preferred 100",
                         "venues": "default=gym_a",
                     }
@@ -1075,9 +1076,26 @@ class TrainerSolverMvpTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertIn("Alice Updated", (input_dir / "students.csv").read_text(encoding="utf-8"))
-            self.assertIn("lessons_per_week", (input_dir / "students.csv").read_text(encoding="utf-8").splitlines()[0])
-            self.assertIn(",2", (input_dir / "students.csv").read_text(encoding="utf-8"))
+            students_text = (input_dir / "students.csv").read_text(encoding="utf-8")
+            self.assertIn("lessons_per_week", students_text.splitlines()[0])
+            self.assertIn("couple", students_text.splitlines()[0])
+            self.assertIn(",2,pair_a", students_text)
             self.assertIn("Tue,10:00,12:00,preferred,100", (input_dir / "preferences.csv").read_text(encoding="utf-8"))
+
+    def test_web_student_rows_load_couple_column(self) -> None:
+        """The Students page should expose the optional students.csv couple column."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+            (input_dir / "students.csv").write_text(
+                "student_id,name,default_venue_id,priority,lessons_per_week,couple\n"
+                "1001,Alice,gym_a,1,1,pair_a\n",
+                encoding="utf-8",
+            )
+
+            rows = schedule_web_app.build_table_rows(input_dir)
+
+            self.assertEqual("pair_a", rows[0]["couple"])
 
     def test_web_preference_score_defaults_are_available(self) -> None:
         """Missing config score keys should fall back to current level-score pairs."""
@@ -2086,7 +2104,15 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("runtimePlanningStart", html)
         self.assertIn("runtimePlanningEnd", html)
         self.assertIn("runtimeFreezeNow", html)
-        self.assertIn("saveRuntimeConfigButton", html)
+        self.assertIn('type="datetime-local"', html)
+        self.assertNotIn("saveRuntimeConfigButton", html)
+        self.assertIn("calendarBackgroundMode", html)
+        self.assertIn("selectedStatus", html)
+        self.assertIn("cleanScheduleButton", html)
+        self.assertIn("toggleTrayButton", html)
+        self.assertIn("unscheduledTray", html)
+        self.assertIn("allOptionalButton", html)
+        self.assertIn("allRequiredButton", html)
         self.assertNotIn('data-temp-slot="0"', html)
         self.assertIn("saveVenuesButton", html)
         self.assertIn("saveTrainerButton", html)
@@ -2102,6 +2128,7 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("lessonTableBody", html)
         self.assertIn("shared_session_id", html)
         self.assertIn("lessons_per_week", html)
+        self.assertIn("couple", html)
         self.assertIn("booking_day", html)
         self.assertIn("booking_start", html)
         self.assertIn("booking_status", html)
@@ -2117,7 +2144,7 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("/api/preference-scores", script)
         self.assertIn("saveConfigParameters", script)
         self.assertIn("/api/config", script)
-        self.assertIn("saveRuntimeConfig", script)
+        self.assertNotIn("saveRuntimeConfig", script)
         self.assertIn("collectRuntimeConfig", script)
         self.assertIn("runtime_config", script)
         self.assertIn("resetConfigDefaults", script)
@@ -2128,6 +2155,16 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("Solve time", script)
         self.assertIn("generateLessonsFromStudents", script)
         self.assertIn("reconcileLessonsFromStudents", script)
+        self.assertIn('must_schedule: "FALSE"', script)
+        self.assertIn("setAllMustSchedule", script)
+        self.assertIn("renderUnscheduledTray", script)
+        self.assertIn("toggleTrayVisibility", script)
+        self.assertIn("tray-table", script)
+        self.assertIn("--row-span:${rowSpan}", script)
+        self.assertIn("preferenceClassForCell", script)
+        self.assertIn("updateSelectedStatus", script)
+        self.assertIn("cleanSchedule", script)
+        self.assertIn("coupleSize > 1 ? couple", script)
         self.assertIn("savedSolutions", script)
         self.assertIn("MAX_SAVED_SOLUTIONS", script)
         self.assertIn("window.confirm", script)

@@ -21,6 +21,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   temporary Organizer solution slots.
 - Added Students-page CSV import for `students.csv` and `preferences.csv` test
   files.
+- Added Students-page loading and saving for the `couple` grouping column, with
+  generated lessons using shared group values as `shared_session_id`.
+- Added an Organizer unscheduled lesson tray, Clean Schedule, selected-session
+  status saving, preference-background mode, current-week runtime date inputs,
+  duration-aware calendar blocks, and Lessons bulk required/optional controls.
+- Updated `run_web_app.cmd` to default to port `8001` and open the organizer in
+  the default browser automatically.
 - Added Students/Lessons clean buttons, editable Setup config parameters with
   reset-to-defaults, and optimizer failure diagnostics in the Organizer text
   panel.

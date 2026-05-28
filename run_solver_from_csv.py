@@ -83,7 +83,7 @@ TEMPLATE_ROWS: Dict[str, List[Dict[str, str]]] = {
         {"key": "preference_score_last_resort", "value": "20"},
     ],
     "students.csv": [
-        {"student_id": "stu_alice", "name": "王小明", "default_venue_id": "gym_a", "priority": "2", "lessons_per_week": "1"},
+        {"student_id": "stu_alice", "name": "王小明", "default_venue_id": "gym_a", "priority": "2", "lessons_per_week": "1", "couple": ""},
     ],
     "venues.csv": [
         {"venue_id": "gym_a", "name": "台北教室A"},

@@ -72,7 +72,7 @@ CONFIG_DEFAULTS = {
     for row in TEMPLATE_ROWS["config.csv"]
     if row["key"] in CORE_CONFIG_KEYS
 }
-STUDENT_HEADERS = ["student_id", "name", "default_venue_id", "priority", "lessons_per_week"]
+STUDENT_HEADERS = ["student_id", "name", "default_venue_id", "priority", "lessons_per_week", "couple"]
 LESSON_HEADERS = ["lesson_id", "student_id", "venue_id", "duration_min", "must_schedule", "priority", "shared_session_id"]
 BOOKING_HEADERS = ["booking_id", "lesson_id", "student_id", "venue_id", "start_datetime", "end_datetime", "status", "lock_level"]
 DAY_SPEC_RE = re.compile(r"^(?P<start>Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?:-(?P<end>Mon|Tue|Wed|Thu|Fri|Sat|Sun))?$")
@@ -338,7 +338,7 @@ def clear_solution(output_path: Path) -> bool:
 def write_csv_rows(path: Path, headers: List[str], rows: List[Dict[str, str]]) -> None:
     """Write CSV rows, preserving headers even when the table is empty."""
     if rows:
-        write_csv(path, rows)
+        write_csv(path, [{header: row.get(header, "") for header in headers} for row in rows])
         return
     path.write_text(",".join(headers) + "\n", encoding="utf-8", newline="")
 
@@ -433,6 +433,8 @@ def normalize_numeric_ids(input_dir: Path, output_path: Path) -> Dict[str, Any]:
         row["student_id"] = student_id_map.get(row.get("student_id", ""), row.get("student_id", ""))
         row.setdefault("lessons_per_week", "1")
         row["lessons_per_week"] = row.get("lessons_per_week", "") or "1"
+        if row.get("couple", "") in student_id_map:
+            row["couple"] = student_id_map[row["couple"]]
     for row in preference_rows:
         row["student_id"] = student_id_map.get(row.get("student_id", ""), row.get("student_id", ""))
     for row in lesson_rows:
@@ -516,6 +518,10 @@ def build_table_rows(input_dir: Path) -> List[Dict[str, str]]:
     """Build editable student/preference table rows."""
     students = load_students(input_dir)
     preferences = load_preferences(input_dir)
+    raw_students = {
+        row.get("student_id", ""): row
+        for row in read_csv_rows(input_dir / "students.csv")
+    }
     by_student: Dict[str, List[StudentPreference]] = {}
     for pref in preferences:
         by_student.setdefault(pref.student_id, []).append(pref)
@@ -525,6 +531,7 @@ def build_table_rows(input_dir: Path) -> List[Dict[str, str]]:
             "student_id": student.student_id,
             "student_name": student.name,
             "lessons_per_week": str(student.lessons_per_week),
+            "couple": raw_students.get(student.student_id, {}).get("couple", ""),
             "available_timeslots": format_timeslot_string(by_student.get(student.student_id, [])),
             "venues": f"default={student.default_venue_id}",
         }
@@ -654,6 +661,7 @@ def validate_table_rows(input_dir: Path, rows: List[Dict[str, Any]]) -> Tuple[Li
         student_id = str(raw.get("student_id", "")).strip()
         student_name = str(raw.get("student_name", "")).strip()
         lessons_per_week_text = str(raw.get("lessons_per_week", "1")).strip() or "1"
+        couple = str(raw.get("couple", "")).strip()
         timeslots = str(raw.get("available_timeslots", "")).strip()
         venues = str(raw.get("venues", "")).strip()
 
@@ -701,6 +709,7 @@ def validate_table_rows(input_dir: Path, rows: List[Dict[str, Any]]) -> Tuple[Li
                 "default_venue_id": default_venue_id,
                 "priority": str(existing.priority if existing is not None else 1),
                 "lessons_per_week": str(lessons_per_week),
+                "couple": couple,
             }
         )
         for pref in parsed_preferences:

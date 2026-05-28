@@ -6,6 +6,9 @@ let appData = null;
 let currentSolution = null;
 let evaluationResult = null;
 let draggedGroupKey = null;
+let selectedGroupKey = null;
+let calendarBackgroundMode = "trainer";
+let trayVisible = true;
 const dirtySections = new Set();
 const savedSolutions = [];
 const MAX_SAVED_SOLUTIONS = 5;
@@ -98,6 +101,8 @@ async function loadData() {
 
 function renderAll() {
   renderRuntimeConfig();
+  document.getElementById("calendarBackgroundMode").value = calendarBackgroundMode;
+  renderTrayVisibility();
   renderTable(appData.table_rows);
   renderLessonTable(appData.lesson_rows || []);
   renderVenueTable(appData.venue_rows);
@@ -139,13 +144,30 @@ function configRowMap() {
   return new Map((appData.config_rows || []).map((row) => [row.key, row.value]));
 }
 
+function currentWeekRuntimeValues() {
+  const now = new Date();
+  const monday = new Date(now);
+  const mondayOffset = (now.getDay() + 6) % 7;
+  monday.setDate(now.getDate() - mondayOffset);
+  monday.setHours(9, 0, 0, 0);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(22, 0, 0, 0);
+  return {
+    planning_start: formatIsoLocal(monday),
+    planning_end: formatIsoLocal(sunday),
+    freeze_now: formatIsoLocal(now),
+  };
+}
+
 function runtimeConfigValues() {
   const rows = configRowMap();
+  const currentWeek = currentWeekRuntimeValues();
   return {
     mode: (appData.config && appData.config.mode) || rows.get("mode") || "weekly_planning",
-    planning_start: (appData.config && appData.config.planning_start) || rows.get("planning_start") || "",
-    planning_end: (appData.config && appData.config.planning_end) || rows.get("planning_end") || "",
-    freeze_now: (appData.config && appData.config.freeze_now) || rows.get("freeze_now") || "",
+    planning_start: currentWeek.planning_start,
+    planning_end: currentWeek.planning_end,
+    freeze_now: currentWeek.freeze_now,
   };
 }
 
@@ -262,14 +284,16 @@ function defaultVenueForStudent(row) {
 
 function appendGeneratedLessonForStudent(studentRow) {
   const existingStudent = (appData.students || []).find((student) => student.student_id === studentRow.student_id);
+  const couple = studentRow.couple || "";
+  const coupleSize = collectRows().filter((row) => row.couple && row.couple === couple).length;
   appendRow("lessonTableBody", "lessonRowTemplate", {
     lesson_id: nextLessonIdForStudent(studentRow.student_id),
     student_id: studentRow.student_id,
     venue_id: defaultVenueForStudent(studentRow),
     duration_min: "60",
-    must_schedule: "TRUE",
+    must_schedule: "FALSE",
     priority: String(existingStudent ? existingStudent.priority : 1),
-    shared_session_id: "",
+    shared_session_id: coupleSize > 1 ? couple : "",
     booking_day: "",
     booking_start: "",
     booking_end: "",
@@ -564,6 +588,50 @@ function availabilityMap(windows) {
   return map;
 }
 
+function preferenceClassForCell(day, mark) {
+  if (calendarBackgroundMode !== "preference") {
+    return "";
+  }
+  const group = selectedGroup();
+  if (!group) {
+    return "";
+  }
+  const studentIds = new Set(group.items.map((item) => item.student_id));
+  const levels = {preferred: 3, acceptable: 2, last_resort: 1};
+  let bestLevel = "";
+  let bestRank = 0;
+  (appData.preferences || []).forEach((pref) => {
+    if (!studentIds.has(pref.student_id) || pref.day !== day) {
+      return;
+    }
+    const start = minutes(pref.start);
+    const end = minutes(pref.end);
+    if (start <= mark && mark + 30 <= end) {
+      const rank = levels[pref.level] || 1;
+      if (rank > bestRank) {
+        bestRank = rank;
+        bestLevel = pref.level;
+      }
+    }
+  });
+  return bestLevel ? `preference-${bestLevel}` : "";
+}
+
+function selectedGroup() {
+  return lessonGroups(currentSolution, appData ? appData.lessons || [] : [])
+    .find((group) => group.key === selectedGroupKey) || null;
+}
+
+function updateSelectedStatusControl() {
+  const select = document.getElementById("selectedStatus");
+  if (!select) {
+    return;
+  }
+  const group = selectedGroup();
+  select.disabled = !group;
+  select.value = group ? (group.items[0].booking_status || "draft") : "";
+}
+
 function lessonGroups(solution, lessons) {
   if (!solution || !solution.schedule) {
     return [];
@@ -582,6 +650,35 @@ function lessonGroups(solution, lessons) {
     groups.get(key).items.push(item);
   });
   return [...groups.values()];
+}
+
+function unscheduledLessonGroups() {
+  const scheduledIds = new Set(((currentSolution && currentSolution.schedule) || []).map((item) => item.lesson_id));
+  const studentById = new Map((appData.students || []).map((student) => [student.student_id, student]));
+  const venueById = new Map((appData.venues || []).map((venue) => [venue.venue_id, venue]));
+  const groups = new Map();
+  (appData.lessons || []).forEach((lesson) => {
+    if (scheduledIds.has(lesson.lesson_id)) {
+      return;
+    }
+    const shared = lesson.shared_session_id || "";
+    const key = shared ? `tray-shared-${shared}` : `tray-lesson-${lesson.lesson_id}`;
+    if (!groups.has(key)) {
+      groups.set(key, {key, shared_session_id: shared, lessons: []});
+    }
+    const student = studentById.get(lesson.student_id) || {};
+    const venue = venueById.get(lesson.venue_id) || {};
+    groups.get(key).lessons.push({
+      ...lesson,
+      student_name: student.name || lesson.student_id,
+      venue_name: venue.name || lesson.venue_id,
+    });
+  });
+  return [...groups.values()];
+}
+
+function trayGroupByKey(key) {
+  return unscheduledLessonGroups().find((group) => group.key === key) || null;
 }
 
 function currentLesson(item) {
@@ -719,10 +816,73 @@ function syncScheduleToCurrentInput() {
   return {resizedCount, updatedCount, removedCount};
 }
 
+function renderUnscheduledTray() {
+  const tray = document.getElementById("unscheduledTray");
+  const count = document.getElementById("unscheduledCount");
+  if (!tray || !count) {
+    return;
+  }
+  const groups = unscheduledLessonGroups();
+  count.textContent = String(groups.reduce((total, group) => total + group.lessons.length, 0));
+  if (!groups.length) {
+    tray.innerHTML = `<div class="tray-empty">No unscheduled lessons</div>`;
+    return;
+  }
+  tray.innerHTML = `
+    <table class="tray-table">
+      <thead>
+        <tr>
+          <th>lesson</th>
+          <th>student</th>
+          <th>duration</th>
+          <th>venue</th>
+        </tr>
+      </thead>
+      <tbody>
+      ${groups.map((group) => {
+    const names = group.lessons.map((lesson) => lesson.student_name).join(" / ");
+    const venueNames = [...new Set(group.lessons.map((lesson) => lesson.venue_name))].join(" / ");
+    const duration = Math.max(...group.lessons.map((lesson) => Number(lesson.duration_min) || 60));
+    const label = group.shared_session_id ? `shared ${group.shared_session_id}` : group.lessons[0].lesson_id;
+    return `
+        <tr class="tray-lesson" draggable="true" data-tray-key="${esc(group.key)}">
+          <td>${esc(label)}</td>
+          <td>${esc(names)}</td>
+          <td>${esc(duration)} min</td>
+          <td>${esc(venueNames)}</td>
+        </tr>`;
+  }).join("")}
+      </tbody>
+    </table>`;
+  document.querySelectorAll(".tray-lesson").forEach((block) => {
+    block.addEventListener("dragstart", (event) => {
+      draggedGroupKey = block.dataset.trayKey;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", draggedGroupKey);
+    });
+  });
+}
+
+function renderTrayVisibility() {
+  const shell = document.querySelector(".calendar-shell");
+  const button = document.getElementById("toggleTrayButton");
+  if (!shell || !button) {
+    return;
+  }
+  shell.classList.toggle("tray-hidden", !trayVisible);
+  button.textContent = trayVisible ? "Hide Tray" : "Show Tray";
+}
+
+function toggleTrayVisibility() {
+  trayVisible = !trayVisible;
+  renderTrayVisibility();
+}
+
 function renderCalendar(data) {
   const grid = document.getElementById("calendarGrid");
   const available = availabilityMap(data.coach_availability || []);
   const groupsByCell = new Map();
+  const blocks = [];
 
   lessonGroups(currentSolution, data.lessons || []).forEach((group) => {
     const first = group.items[0];
@@ -745,8 +905,11 @@ function renderCalendar(data) {
     DAYS.forEach((day) => {
       const key = `${day}-${mark}`;
       const classes = ["calendar-cell"];
-      if (available.has(key)) {
+      const preferenceClass = preferenceClassForCell(day, mark);
+      if (calendarBackgroundMode === "trainer" && available.has(key)) {
         classes.push("available");
+      } else if (preferenceClass) {
+        classes.push(preferenceClass);
       }
       const groups = groupsByCell.get(key) || [];
       html += `<div class="${classes.join(" ")}" data-day="${esc(day)}" data-minute="${mark}">`;
@@ -756,22 +919,32 @@ function renderCalendar(data) {
         const changed = group.items.some((item) => item.is_changed);
         const status = first.booking_status || "manual";
         const statusClass = `status-${status || "manual"}`;
-        html += `
-          <div class="lesson-block ${statusClass} ${changed ? "changed" : ""}" draggable="true" data-group-key="${esc(group.key)}">
+        const selectedClass = group.key === selectedGroupKey ? "selected" : "";
+        const dayIndex = DAYS.indexOf(day);
+        const startIndex = Math.floor((mark - START_HOUR * 60) / 30);
+        const rowSpan = Math.max(1, Math.ceil(groupDuration(group) / 30));
+        blocks.push(`
+          <div class="lesson-block ${statusClass} ${selectedClass} ${changed ? "changed" : ""}" draggable="true" data-group-key="${esc(group.key)}" style="--day-index:${dayIndex};--start-index:${startIndex};--row-span:${rowSpan};">
             <span class="lesson-title">${esc(names)}</span>
             <span class="lesson-status">${esc(status)}</span>
             <span class="lesson-meta">${esc(timeFromIso(first.start_datetime))}-${esc(timeFromIso(first.end_datetime))} - ${esc(first.venue_name)}</span>
-          </div>`;
+          </div>`);
       });
       html += `</div>`;
     });
   }
-  grid.innerHTML = html;
+  grid.innerHTML = html + blocks.join("");
   bindCalendarDragHandlers();
+  renderUnscheduledTray();
+  updateSelectedStatusControl();
 }
 
 function bindCalendarDragHandlers() {
   document.querySelectorAll(".lesson-block").forEach((block) => {
+    block.addEventListener("click", () => {
+      selectedGroupKey = block.dataset.groupKey;
+      renderCalendar(appData);
+    });
     block.addEventListener("dragstart", (event) => {
       draggedGroupKey = block.dataset.groupKey;
       event.dataTransfer.effectAllowed = "move";
@@ -793,31 +966,79 @@ function bindCalendarDragHandlers() {
   });
 }
 
-async function moveGroupTo(groupKey, day, startMinute) {
-  if (!currentSolution || !groupKey) {
-    return;
-  }
-  const group = lessonGroups(currentSolution, appData.lessons || []).find((item) => item.key === groupKey);
-  if (!group) {
-    return;
-  }
-  const first = group.items[0];
-  const newStart = formatIsoLocal(dateForDayAndTime(first.start_datetime, day, startMinute));
-  const duration = groupDuration(group);
+function scheduleItemsFromTrayGroup(group, day, startMinute) {
+  const studentById = new Map((appData.students || []).map((student) => [student.student_id, student]));
+  const venueById = new Map((appData.venues || []).map((venue) => [venue.venue_id, venue]));
+  const anchor = planningAnchorIso();
+  const newStart = formatIsoLocal(dateForDayAndTime(anchor, day, startMinute));
+  const duration = Math.max(...group.lessons.map((lesson) => Number(lesson.duration_min) || 60));
   const newEnd = addMinutes(newStart, duration);
-  const lessonIds = new Set(group.items.map((item) => item.lesson_id));
-  currentSolution.schedule = currentSolution.schedule.map((item) => {
-    if (!lessonIds.has(item.lesson_id)) {
-      return item;
-    }
+  return group.lessons.map((lesson) => {
+    const student = studentById.get(lesson.student_id) || {};
+    const venue = venueById.get(lesson.venue_id) || {};
     return {
-      ...item,
+      lesson_id: lesson.lesson_id,
+      student_id: lesson.student_id,
+      student_name: student.name || lesson.student_id,
+      venue_id: lesson.venue_id,
+      venue_name: venue.name || lesson.venue_id,
       start_datetime: newStart,
       end_datetime: newEnd,
+      preference_level: "manual",
+      preference_score: 0,
       is_changed: true,
+      shared_session_id: lesson.shared_session_id || "",
+      booking_status: "draft",
     };
   });
-  updateLessonRowsFromSchedule(currentSolution.schedule.filter((item) => lessonIds.has(item.lesson_id)), "draft", true);
+}
+
+async function moveGroupTo(groupKey, day, startMinute) {
+  if (!groupKey) {
+    return;
+  }
+  currentSolution = currentSolution || {status: "MANUAL", summary: {}, schedule: [], changes: [], warnings: []};
+  currentSolution.status = "MANUAL";
+  const trayGroup = trayGroupByKey(groupKey);
+  let movedItems = [];
+  if (trayGroup) {
+    movedItems = scheduleItemsFromTrayGroup(trayGroup, day, startMinute);
+    const movedIds = new Set(movedItems.map((item) => item.lesson_id));
+    currentSolution.schedule = [
+      ...(currentSolution.schedule || []).filter((item) => !movedIds.has(item.lesson_id)),
+      ...movedItems,
+    ];
+  } else {
+    const group = lessonGroups(currentSolution, appData.lessons || []).find((item) => item.key === groupKey);
+    if (!group) {
+      return;
+    }
+    const first = group.items[0];
+    const newStart = formatIsoLocal(dateForDayAndTime(first.start_datetime, day, startMinute));
+    const duration = groupDuration(group);
+    const newEnd = addMinutes(newStart, duration);
+    const lessonIds = new Set(group.items.map((item) => item.lesson_id));
+    currentSolution.schedule = currentSolution.schedule.map((item) => {
+      if (!lessonIds.has(item.lesson_id)) {
+        return item;
+      }
+      const moved = {
+        ...item,
+        start_datetime: newStart,
+        end_datetime: newEnd,
+        is_changed: true,
+      };
+      movedItems.push(moved);
+      return moved;
+    });
+  }
+  selectedGroupKey = null;
+  currentSolution.summary = {
+    ...(currentSolution.summary || {}),
+    scheduled_lessons: currentSolution.schedule.length,
+    unscheduled_lessons: Math.max(0, (appData.lessons || []).length - currentSolution.schedule.length),
+  };
+  updateLessonRowsFromSchedule(movedItems, "draft", true);
   renderLessonTable(appData.lesson_rows || []);
   markDirty("lessons");
   renderCalendar(appData);
@@ -865,6 +1086,7 @@ async function evaluateCurrentSchedule() {
 
 function resetSchedule() {
   currentSolution = appData.solution ? structuredClone(appData.solution) : null;
+  selectedGroupKey = null;
   syncScheduleToCurrentInput();
   if (currentSolution && currentSolution.schedule) {
     updateLessonRowsFromSchedule(currentSolution.schedule, "draft", true);
@@ -874,6 +1096,72 @@ function resetSchedule() {
   renderCalendar(appData);
   evaluateCurrentSchedule().catch((error) => setStatus(JSON.stringify(error), true));
   setStatus("Schedule reset to optimized solution");
+}
+
+async function saveLessonRowsNow(statusText) {
+  syncLessonRowsFromDom();
+  await fetchJson("/api/lessons", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({rows: collectLessonRows()}),
+  });
+  clearDirty("lessons");
+  renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
+  renderCalendar(appData);
+  renderDiagnostics();
+  setStatus(statusText);
+}
+
+async function cleanSchedule() {
+  setStatus("Cleaning schedule...");
+  (appData.lesson_rows || []).forEach((row) => {
+    row.booking_id = "";
+    row.booking_day = "";
+    row.booking_start = "";
+    row.booking_end = "";
+    row.booking_status = "";
+    row.booking_lock_level = "1";
+    row.booking_dirty = "";
+    row.booking_readonly = "FALSE";
+  });
+  currentSolution = null;
+  evaluationResult = null;
+  selectedGroupKey = null;
+  savedSolutions.length = 0;
+  renderLessonTable(appData.lesson_rows || []);
+  renderSavedSolutions();
+  renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
+  renderCalendar(appData);
+  renderDiagnostics();
+  markDirty("lessons");
+  try {
+    await saveLessonRowsNow("Schedule cleaned and saved");
+  } catch (error) {
+    setStatus(formatErrorStatus(error, "Clean schedule failed"), true);
+  }
+}
+
+async function updateSelectedStatus() {
+  const group = selectedGroup();
+  const status = document.getElementById("selectedStatus").value;
+  if (!group || !status) {
+    return;
+  }
+  currentSolution.status = "MANUAL";
+  const lessonIds = new Set(group.items.map((item) => item.lesson_id));
+  currentSolution.schedule = (currentSolution.schedule || []).map((item) => (
+    lessonIds.has(item.lesson_id)
+      ? {...item, booking_status: status, is_changed: true}
+      : item
+  ));
+  updateLessonRowsFromSchedule(currentSolution.schedule.filter((item) => lessonIds.has(item.lesson_id)), status, true);
+  renderLessonTable(appData.lesson_rows || []);
+  renderCalendar(appData);
+  try {
+    await saveLessonRowsNow(`Status changed to ${status}`);
+  } catch (error) {
+    setStatus(formatErrorStatus(error, "Status save failed"), true);
+  }
 }
 
 function normalizedScheduleText() {
@@ -1128,11 +1416,21 @@ function cleanLessons() {
   appData.lessons = [];
   currentSolution = null;
   evaluationResult = null;
+  selectedGroupKey = null;
   markDirty("lessons");
   renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
   renderCalendar(appData);
   renderDiagnostics();
   setStatus("Lessons cleared; click Save Lessons to persist", true);
+}
+
+function setAllMustSchedule(value) {
+  document.querySelectorAll('#lessonTableBody [data-field="must_schedule"]').forEach((input) => {
+    input.value = value;
+  });
+  syncLessonRowsFromDom();
+  markDirty("lessons");
+  setStatus(value === "TRUE" ? "All lessons marked required; click Save Lessons to persist" : "All lessons marked optional; click Save Lessons to persist", true);
 }
 
 async function saveStudents() {
@@ -1247,33 +1545,6 @@ async function saveConfigParameters() {
     setStatus("Config parameters saved");
   } catch (error) {
     setStatus(formatErrorStatus(error, "Save config failed"), true);
-  }
-}
-
-async function saveRuntimeConfig() {
-  setStatus("Saving runtime config...");
-  const runtime = collectRuntimeConfig();
-  const byKey = new Map((appData.config_rows || []).map((row) => [row.key, {...row}]));
-  ["mode", "planning_start", "planning_end", "freeze_now"].forEach((key) => {
-    byKey.set(key, {key, value: runtime[key] || ""});
-  });
-  const rows = (appData.config_rows || []).map((row) => byKey.get(row.key));
-  ["mode", "planning_start", "planning_end", "slot_size_min", "max_solve_seconds", "freeze_now", "freeze_buffer_hours"].forEach((key) => {
-    if (!rows.some((row) => row.key === key) && byKey.has(key)) {
-      rows.push(byKey.get(key));
-    }
-  });
-  try {
-    await fetchJson("/api/config", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({rows}),
-    });
-    clearDirty("config");
-    await loadData();
-    setStatus("Runtime config saved");
-  } catch (error) {
-    setStatus(formatErrorStatus(error, "Save runtime config failed"), true);
   }
 }
 
@@ -1397,16 +1668,22 @@ document.getElementById("saveTrainerButton").addEventListener("click", saveTrain
 document.getElementById("savePreferenceScoresButton").addEventListener("click", savePreferenceScores);
 document.getElementById("saveConfigButton").addEventListener("click", saveConfigParameters);
 document.getElementById("resetConfigButton").addEventListener("click", resetConfigDefaults);
-document.getElementById("saveRuntimeConfigButton").addEventListener("click", saveRuntimeConfig);
 document.getElementById("generateLessonsButton").addEventListener("click", generateLessonsFromStudents);
 document.getElementById("cleanStudentsButton").addEventListener("click", cleanStudents);
 document.getElementById("cleanLessonsButton").addEventListener("click", cleanLessons);
+document.getElementById("cleanScheduleButton").addEventListener("click", cleanSchedule);
 document.getElementById("resetScheduleButton").addEventListener("click", resetSchedule);
 document.getElementById("saveSolutionButton").addEventListener("click", saveVisibleSolution);
-["runtimeMode", "runtimePlanningStart", "runtimePlanningEnd", "runtimeFreezeNow"].forEach((id) => {
-  document.getElementById(id).addEventListener("change", () => markDirty("config"));
-  document.getElementById(id).addEventListener("input", () => markDirty("config"));
+document.getElementById("calendarBackgroundMode").addEventListener("change", (event) => {
+  calendarBackgroundMode = event.target.value;
+  renderCalendar(appData);
 });
+document.getElementById("toggleTrayButton").addEventListener("click", toggleTrayVisibility);
+document.getElementById("selectedStatus").addEventListener("change", () => {
+  updateSelectedStatus().catch((error) => setStatus(JSON.stringify(error), true));
+});
+document.getElementById("allOptionalButton").addEventListener("click", () => setAllMustSchedule("FALSE"));
+document.getElementById("allRequiredButton").addEventListener("click", () => setAllMustSchedule("TRUE"));
 document.getElementById("exportScheduleButton").addEventListener("click", exportScheduleCsv);
 document.getElementById("importScheduleButton").addEventListener("click", () => document.getElementById("scheduleCsvInput").click());
 document.getElementById("scheduleCsvInput").addEventListener("change", (event) => {
@@ -1429,6 +1706,7 @@ document.getElementById("addStudentButton").addEventListener("click", () => {
     student_id: studentId,
     student_name: "",
     lessons_per_week: "1",
+    couple: "",
     available_timeslots: "",
     venues: appData.venues && appData.venues[0] ? `default=${appData.venues[0].venue_id}` : "",
   };
@@ -1443,7 +1721,7 @@ document.getElementById("addLessonButton").addEventListener("click", () => {
     student_id: studentId,
     venue_id: appData.venues && appData.venues[0] ? appData.venues[0].venue_id : "",
     duration_min: "60",
-    must_schedule: "TRUE",
+    must_schedule: "FALSE",
     priority: "1",
     shared_session_id: "",
     booking_day: "",

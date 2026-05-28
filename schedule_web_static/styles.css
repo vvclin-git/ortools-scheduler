@@ -83,7 +83,7 @@ button:hover {
 
 .runtime-config-bar {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(190px, 1fr)) auto auto;
+  grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(190px, 1fr)) auto;
   gap: 10px;
   align-items: end;
   margin-bottom: 14px;
@@ -119,6 +119,16 @@ button:hover {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+  align-items: flex-end;
+}
+
+.inline-control {
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 main {
@@ -207,23 +217,79 @@ h2 {
 .calendar-shell,
 .input-table-wrap,
 .file-import {
-  overflow: auto;
   border: 1px solid var(--line);
   background: var(--panel);
+}
+
+.calendar-shell {
+  display: block;
+  overflow: hidden;
+}
+
+.calendar-shell.tray-hidden .unscheduled-tray {
+  display: none;
+}
+
+.input-table-wrap,
+.file-import {
+  overflow: auto;
+}
+
+.unscheduled-tray {
+  border-bottom: 1px solid var(--line);
+  background: #f9faf7;
+  padding: 10px;
+  overflow: auto;
+  max-height: 220px;
+}
+
+.tray-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.tray-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tray-list {
+  overflow: auto;
+}
+
+.tray-empty {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .file-import {
   padding: 12px;
 }
 
+.calendar-scroll {
+  overflow: auto;
+  min-width: 0;
+  width: 100%;
+}
+
 .calendar-grid {
   display: grid;
   grid-template-columns: 72px repeat(7, minmax(150px, 1fr));
+  grid-auto-rows: 52px;
   min-width: 1120px;
+  position: relative;
 }
 
 .calendar-cell {
-  min-height: 38px;
+  min-height: 52px;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   padding: 4px;
@@ -239,6 +305,7 @@ h2 {
 .time-cell {
   background: #eef2ed;
   font-weight: 800;
+  z-index: 1;
 }
 
 .time-cell {
@@ -250,20 +317,74 @@ h2 {
   background: var(--availability);
 }
 
+.preference-preferred {
+  background: #dff3c8;
+}
+
+.preference-acceptable {
+  background: #d8eefc;
+}
+
+.preference-last_resort {
+  background: #ffe7bd;
+}
+
 .lesson-block {
+  position: absolute;
+  left: calc(72px + (var(--day-index) * ((100% - 72px) / 7)) + 6px);
+  top: calc(52px + (var(--start-index) * 52px) + 6px);
+  width: calc(((100% - 72px) / 7) - 12px);
+  height: calc((var(--row-span) * 52px) - 12px);
   border-left: 4px solid var(--lesson);
   background: #fff8e7;
   border-radius: 4px;
-  padding: 5px 6px;
-  margin-bottom: 4px;
+  padding: 8px 10px;
   font-size: 12px;
   line-height: 1.25;
   box-shadow: 0 1px 2px rgba(31, 41, 51, 0.12);
   cursor: grab;
+  overflow: hidden;
+  z-index: 3;
 }
 
-.lesson-block:active {
+.tray-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.tray-table th,
+.tray-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 7px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.tray-table th {
+  color: var(--muted);
+  background: #eef2ed;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.tray-lesson {
+  cursor: grab;
+  background: #fffdf7;
+}
+
+.tray-lesson:hover {
+  background: #fff8e7;
+}
+
+.lesson-block:active,
+.tray-lesson:active {
   cursor: grabbing;
+}
+
+.lesson-block.selected {
+  outline: 2px solid #111827;
+  outline-offset: 1px;
 }
 
 .lesson-block.changed {
@@ -394,5 +515,13 @@ textarea {
   .section-actions {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .calendar-shell {
+    display: block;
+  }
+
+  .unscheduled-tray {
+    border-bottom: 1px solid var(--line);
   }
 }

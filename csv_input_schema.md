@@ -157,17 +157,18 @@ the input directory.
 | column | required | example | meaning |
 |---|---:|---|---|
 | `student_id` | yes | `stu_alice` | Unique student ID. |
-| `name` | yes | `王小明` | Display name in output. Traditional Chinese is supported. |
+| `name` | yes | `Alice` | Display name in output. Traditional Chinese is supported. |
 | `default_venue_id` | yes | `gym_a` | Student's usual venue. Must exist in `venues.csv`. |
 | `priority` | no | `2` | Student priority for future use and data labeling. Defaults to `1`. |
 | `lessons_per_week` | no | `1` | Number of lesson rows the web app should maintain for this student. Defaults to `1`. |
+| `couple` | no | `2001` | Optional grouping key used by the web app when generating lessons. If two or more students share the same non-blank value, generated lesson rows use that value as `shared_session_id`. |
 
 Example:
 
 ```csv
-student_id,name,default_venue_id,priority,lessons_per_week
-stu_alice,王小明,gym_a,2,1
-stu_bob,陳美華,gym_b,1,1
+student_id,name,default_venue_id,priority,lessons_per_week,couple
+stu_alice,Alice,gym_a,2,1,pair_1
+stu_bob,Bob,gym_b,1,1,pair_1
 ```
 
 ### venues.csv
@@ -177,14 +178,14 @@ Places where lessons can happen.
 | column | required | example | meaning |
 |---|---:|---|---|
 | `venue_id` | yes | `gym_a` | Unique venue ID. |
-| `name` | yes | `台北教室A` | Display name in output. Traditional Chinese is supported. |
+| `name` | yes | `Gym A` | Display name in output. Traditional Chinese is supported. |
 
 Example:
 
 ```csv
 venue_id,name
-gym_a,台北教室A
-gym_b,板橋教室B
+gym_a,Gym A
+gym_b,Gym B
 ```
 
 ### travel_times.csv

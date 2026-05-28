@@ -35,23 +35,41 @@
           </label>
           <label>
             planning_start
-            <input id="runtimePlanningStart" spellcheck="false">
+            <input id="runtimePlanningStart" type="datetime-local" spellcheck="false">
           </label>
           <label>
             planning_end
-            <input id="runtimePlanningEnd" spellcheck="false">
+            <input id="runtimePlanningEnd" type="datetime-local" spellcheck="false">
           </label>
           <label>
             freeze_now
-            <input id="runtimeFreezeNow" spellcheck="false">
+            <input id="runtimeFreezeNow" type="datetime-local" spellcheck="false">
           </label>
-          <button id="saveRuntimeConfigButton" class="secondary" type="button">Save Runtime Config</button>
           <button id="solveButton" type="button">Run Optimizer</button>
         </div>
         <div class="section-actions">
           <h2>Weekly Organizer</h2>
           <div class="button-row">
+            <label class="inline-control">
+              background
+              <select id="calendarBackgroundMode">
+                <option value="trainer">Trainer availability</option>
+                <option value="preference">Selected preferences</option>
+              </select>
+            </label>
+            <label class="inline-control">
+              selected status
+              <select id="selectedStatus">
+                <option value="">No selected lesson</option>
+                <option value="draft">draft</option>
+                <option value="confirmed">confirmed</option>
+                <option value="completed">completed</option>
+                <option value="locked">locked</option>
+              </select>
+            </label>
+            <button id="toggleTrayButton" class="secondary" type="button">Hide Tray</button>
             <button id="organizerSaveLessonsButton" type="button">Save Lessons</button>
+            <button id="cleanScheduleButton" class="secondary" type="button">Clean Schedule</button>
             <button id="resetScheduleButton" class="secondary" type="button">Reset</button>
             <button id="saveSolutionButton" class="secondary" type="button">Save Solution</button>
             <span id="savedSolutions" class="saved-solutions" aria-label="Saved solutions"></span>
@@ -61,7 +79,16 @@
           </div>
         </div>
         <div class="calendar-shell">
-          <div id="calendarGrid" class="calendar-grid"></div>
+          <section class="unscheduled-tray" aria-label="Unscheduled lessons">
+            <div class="tray-heading">
+              <h3>Unscheduled Lessons</h3>
+              <span id="unscheduledCount" class="tray-count">0</span>
+            </div>
+            <div id="unscheduledTray" class="tray-list"></div>
+          </section>
+          <div class="calendar-scroll">
+            <div id="calendarGrid" class="calendar-grid"></div>
+          </div>
         </div>
         <pre id="diagnosticText" class="diagnostic-text">No diagnostics yet.</pre>
       </section>
@@ -85,6 +112,7 @@
                 <th>student_id</th>
                 <th>student_name</th>
                 <th>lessons_per_week</th>
+                <th>couple</th>
                 <th>available_timeslots</th>
                 <th>venues</th>
                 <th></th>
@@ -100,6 +128,8 @@
           <h2>Lessons</h2>
           <div class="button-row">
             <button id="addLessonButton" class="secondary" type="button">Add Lesson</button>
+            <button id="allOptionalButton" class="secondary" type="button">All Optional</button>
+            <button id="allRequiredButton" class="secondary" type="button">All Required</button>
             <button id="cleanLessonsButton" class="secondary" type="button">Clean Lessons</button>
             <button id="saveLessonsButton" type="button">Save Lessons</button>
           </div>
@@ -257,6 +287,7 @@
         <td><input data-field="student_id" spellcheck="false"></td>
         <td><input data-field="student_name"></td>
         <td><input data-field="lessons_per_week" inputmode="numeric" spellcheck="false" placeholder="1"></td>
+        <td><input data-field="couple" spellcheck="false" placeholder="2001"></td>
         <td><textarea data-field="available_timeslots" rows="2" spellcheck="false" placeholder="Mon-Fri 0900-1200 preferred; Fri acceptable; Sat"></textarea></td>
         <td><select data-field="venues"></select></td>
         <td><button class="icon-button remove-row" type="button" aria-label="Remove student">Remove</button></td>
