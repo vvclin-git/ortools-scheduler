@@ -7,7 +7,8 @@ let currentSolution = null;
 let evaluationResult = null;
 let draggedGroupKey = null;
 const dirtySections = new Set();
-const temporarySolutions = [null, null, null];
+const savedSolutions = [];
+const MAX_SAVED_SOLUTIONS = 5;
 
 function esc(value) {
   return String(value ?? "")
@@ -96,13 +97,15 @@ async function loadData() {
 }
 
 function renderAll() {
+  renderRuntimeConfig();
   renderTable(appData.table_rows);
   renderLessonTable(appData.lesson_rows || []);
   renderVenueTable(appData.venue_rows);
   renderTravelTable(appData.travel_time_rows);
   renderTrainerTable(appData.trainer_availability_rows);
+  renderConfigTable(appData.config_rows || []);
   renderPreferenceScoreTable(appData.preference_score_rows || []);
-  renderTemporarySolutionSlots();
+  renderSavedSolutions();
   renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
   renderCalendar(appData);
   renderDiagnostics();
@@ -132,6 +135,40 @@ function renderSummary(solution, warnings, evaluation) {
   `).join("");
 }
 
+function configRowMap() {
+  return new Map((appData.config_rows || []).map((row) => [row.key, row.value]));
+}
+
+function runtimeConfigValues() {
+  const rows = configRowMap();
+  return {
+    mode: (appData.config && appData.config.mode) || rows.get("mode") || "weekly_planning",
+    planning_start: (appData.config && appData.config.planning_start) || rows.get("planning_start") || "",
+    planning_end: (appData.config && appData.config.planning_end) || rows.get("planning_end") || "",
+    freeze_now: (appData.config && appData.config.freeze_now) || rows.get("freeze_now") || "",
+  };
+}
+
+function setRuntimeConfigControls(values) {
+  document.getElementById("runtimeMode").value = values.mode || "weekly_planning";
+  document.getElementById("runtimePlanningStart").value = values.planning_start || "";
+  document.getElementById("runtimePlanningEnd").value = values.planning_end || "";
+  document.getElementById("runtimeFreezeNow").value = values.freeze_now || "";
+}
+
+function renderRuntimeConfig() {
+  setRuntimeConfigControls(runtimeConfigValues());
+}
+
+function collectRuntimeConfig() {
+  return {
+    mode: document.getElementById("runtimeMode").value,
+    planning_start: document.getElementById("runtimePlanningStart").value.trim(),
+    planning_end: document.getElementById("runtimePlanningEnd").value.trim(),
+    freeze_now: document.getElementById("runtimeFreezeNow").value.trim(),
+  };
+}
+
 function renderDiagnostics() {
   const lines = [];
   if (!currentSolution) {
@@ -141,6 +178,12 @@ function renderDiagnostics() {
     if (currentSolution.summary) {
       lines.push(`Solver objective: ${currentSolution.summary.objective_value ?? "-"}`);
       lines.push(`Scheduled: ${currentSolution.summary.scheduled_lessons}, unscheduled: ${currentSolution.summary.unscheduled_lessons}, changed: ${currentSolution.summary.changed_lessons ?? "-"}`);
+      if (currentSolution.summary.candidate_count !== undefined) {
+        lines.push(`Candidate count: ${currentSolution.summary.candidate_count}`);
+      }
+      if (currentSolution.summary.solve_wall_time_seconds !== undefined && currentSolution.summary.solve_wall_time_seconds !== null) {
+        lines.push(`Solve time: ${currentSolution.summary.solve_wall_time_seconds}s`);
+      }
     }
     (currentSolution.warnings || []).forEach((item) => lines.push(`Solver warning: ${item}`));
     (currentSolution.changes || []).forEach((item) => {
@@ -256,6 +299,10 @@ function renderTrainerTable(rows) {
   renderRows("trainerTableBody", "trainerRowTemplate", rows);
 }
 
+function renderConfigTable(rows) {
+  renderRows("configTableBody", "configRowTemplate", rows);
+}
+
 function renderPreferenceScoreTable(rows) {
   renderRows("preferenceScoreTableBody", "preferenceScoreRowTemplate", rows);
 }
@@ -285,10 +332,13 @@ function appendRow(bodyId, templateId, row = {}) {
       input.value = lessonRowEnd(row);
     }
   });
-  fragment.querySelector(".remove-row").addEventListener("click", (event) => {
-    event.target.closest("tr").remove();
-    markDirty(sectionForBody(bodyId));
-  });
+  const removeButton = fragment.querySelector(".remove-row");
+  if (removeButton) {
+    removeButton.addEventListener("click", (event) => {
+      event.target.closest("tr").remove();
+      markDirty(sectionForBody(bodyId));
+    });
+  }
   fragment.querySelectorAll("[data-field]").forEach((input) => {
     input.addEventListener("input", () => handleRowEdit(bodyId, input));
     input.addEventListener("change", () => handleRowEdit(bodyId, input));
@@ -438,6 +488,9 @@ function sectionForBody(bodyId) {
   if (bodyId === "trainerTableBody") {
     return "trainer";
   }
+  if (bodyId === "configTableBody") {
+    return "config";
+  }
   if (bodyId === "preferenceScoreTableBody") {
     return "preferenceScores";
   }
@@ -489,6 +542,10 @@ function collectTravelRows() {
 
 function collectTrainerRows() {
   return collectTableRows("trainerTableBody");
+}
+
+function collectConfigRows() {
+  return collectTableRows("configTableBody");
 }
 
 function collectPreferenceScoreRows() {
@@ -772,15 +829,20 @@ function schedulePlacements() {
     return [];
   }
   const lessonById = new Map((appData.lessons || []).map((lesson) => [lesson.lesson_id, lesson]));
+  const rowsById = lessonRowById();
   return currentSolution.schedule.map((item) => {
     const lesson = lessonById.get(item.lesson_id);
+    const row = rowsById.get(item.lesson_id) || {};
     return {
       lesson_id: item.lesson_id,
+      student_id: item.student_id || (lesson && lesson.student_id) || "",
       start_datetime: item.start_datetime,
       end_datetime: item.end_datetime,
       venue_id: item.venue_id,
       shared_session_id: item.shared_session_id || (lesson && lesson.shared_session_id) || "",
-      booking_status: item.booking_status || "",
+      booking_id: row.booking_id || `book_${item.lesson_id}`,
+      booking_status: item.booking_status || row.booking_status || "",
+      booking_lock_level: row.booking_lock_level || "1",
     };
   });
 }
@@ -814,33 +876,80 @@ function resetSchedule() {
   setStatus("Schedule reset to optimized solution");
 }
 
-function renderTemporarySolutionSlots() {
-  document.querySelectorAll("[data-temp-slot]").forEach((button) => {
-    const index = Number(button.dataset.tempSlot);
-    const filled = Boolean(temporarySolutions[index]);
-    button.classList.toggle("filled", filled);
-    button.textContent = filled ? `Slot ${index + 1}` : `Slot ${index + 1} empty`;
-    button.title = filled ? "Switch to this temporary solution" : "Save the current visible solution here";
+function normalizedScheduleText() {
+  return schedulePlacements()
+    .map((item) => [
+      item.lesson_id,
+      item.start_datetime,
+      item.end_datetime,
+      item.venue_id,
+      item.booking_status || "",
+    ].join("|"))
+    .sort()
+    .join("\n");
+}
+
+function scheduleHash() {
+  const text = normalizedScheduleText();
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0").slice(0, 6);
+}
+
+function savedSolutionLabel(hash) {
+  const summary = currentSolution && currentSolution.summary ? currentSolution.summary : {};
+  const scheduled = summary.scheduled_lessons ?? (currentSolution && currentSolution.schedule ? currentSolution.schedule.length : 0);
+  const unscheduled = summary.unscheduled_lessons ?? Math.max(0, (appData.lessons || []).length - scheduled);
+  const score = evaluationResult ? evaluationResult.score : (summary.objective_value ?? "-");
+  return `${hash} | score ${score} | ${scheduled}/${unscheduled}`;
+}
+
+function renderSavedSolutions() {
+  const container = document.getElementById("savedSolutions");
+  container.innerHTML = "";
+  savedSolutions.forEach((saved, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary saved-solution-button";
+    button.textContent = saved.label;
+    button.title = "Switch to this saved solution";
+    button.addEventListener("click", () => restoreSavedSolution(index));
+    container.appendChild(button);
   });
 }
 
-async function useTemporarySolutionSlot(index) {
-  if (!temporarySolutions[index]) {
-    if (!currentSolution || !currentSolution.schedule) {
-      setStatus("No visible schedule to save in this slot", true);
-      return;
-    }
-    temporarySolutions[index] = {
-      solution: structuredClone(currentSolution),
-      lessonRows: structuredClone(appData.lesson_rows || []),
-      evaluation: evaluationResult ? structuredClone(evaluationResult) : null,
-    };
-    renderTemporarySolutionSlots();
-    setStatus(`Saved current schedule to Slot ${index + 1}`);
+function saveVisibleSolution() {
+  if (!currentSolution || !currentSolution.schedule || !currentSolution.schedule.length) {
+    setStatus("No visible schedule to save", true);
     return;
   }
+  if (savedSolutions.length >= MAX_SAVED_SOLUTIONS) {
+    const confirmed = window.confirm("Saving this solution will remove the oldest saved solution. Continue?");
+    if (!confirmed) {
+      return;
+    }
+    savedSolutions.shift();
+  }
+  const hash = scheduleHash();
+  savedSolutions.push({
+    hash,
+    label: savedSolutionLabel(hash),
+    solution: structuredClone(currentSolution),
+    lessonRows: structuredClone(appData.lesson_rows || []),
+    evaluation: evaluationResult ? structuredClone(evaluationResult) : null,
+  });
+  renderSavedSolutions();
+  setStatus(`Saved solution ${hash}`);
+}
 
-  const saved = temporarySolutions[index];
+async function restoreSavedSolution(index) {
+  const saved = savedSolutions[index];
+  if (!saved) {
+    return;
+  }
   currentSolution = structuredClone(saved.solution);
   appData.lesson_rows = structuredClone(saved.lessonRows || []);
   renderLessonTable(appData.lesson_rows);
@@ -848,12 +957,12 @@ async function useTemporarySolutionSlot(index) {
   syncScheduleToCurrentInput();
   evaluationResult = saved.evaluation ? structuredClone(saved.evaluation) : null;
   markDirty("lessons");
-  renderTemporarySolutionSlots();
+  renderSavedSolutions();
   renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
   renderCalendar(appData);
   renderDiagnostics();
   await evaluateCurrentSchedule();
-  setStatus(`Switched to Slot ${index + 1}`);
+  setStatus(`Switched to solution ${saved.hash}`);
 }
 
 function csvEscape(value) {
@@ -864,17 +973,46 @@ function csvEscape(value) {
   return text;
 }
 
+function lockLevelForStatus(status, existing = "1") {
+  const parsed = Number(existing);
+  const base = Number.isFinite(parsed) && parsed >= 0 ? parsed : 1;
+  if (status === "locked") {
+    return String(Math.max(base, 3));
+  }
+  return String(base);
+}
+
+function bookingRowsFromVisibleSchedule() {
+  const lessonById = new Map((appData.lessons || []).map((lesson) => [lesson.lesson_id, lesson]));
+  const rowsById = lessonRowById();
+  return schedulePlacements().map((item) => {
+    const lesson = lessonById.get(item.lesson_id) || {};
+    const row = rowsById.get(item.lesson_id) || {};
+    const status = item.booking_status || row.booking_status || "draft";
+    return {
+      booking_id: row.booking_id || item.booking_id || `book_${item.lesson_id}`,
+      lesson_id: item.lesson_id,
+      student_id: item.student_id || lesson.student_id || "",
+      venue_id: item.venue_id,
+      start_datetime: item.start_datetime,
+      end_datetime: item.end_datetime,
+      status,
+      lock_level: lockLevelForStatus(status, row.booking_lock_level || item.booking_lock_level || "1"),
+    };
+  });
+}
+
 function exportScheduleCsv() {
-  const headers = ["lesson_id", "start_datetime", "end_datetime", "venue_id", "shared_session_id"];
+  const headers = ["booking_id", "lesson_id", "student_id", "venue_id", "start_datetime", "end_datetime", "status", "lock_level"];
   const lines = [headers.join(",")];
-  schedulePlacements().forEach((row) => {
+  bookingRowsFromVisibleSchedule().forEach((row) => {
     lines.push(headers.map((header) => csvEscape(row[header])).join(","));
   });
   const blob = new Blob([`${lines.join("\n")}\n`], {type: "text/csv"});
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = "manual_schedule.csv";
+  link.download = "existing_bookings.csv";
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -920,24 +1058,36 @@ function parseCsv(text) {
 async function importScheduleCsvFile(file) {
   const rows = parseCsv(await file.text());
   const headers = rows.shift() || [];
-  const required = ["lesson_id", "start_datetime", "end_datetime", "venue_id", "shared_session_id"];
+  const required = ["booking_id", "lesson_id", "student_id", "venue_id", "start_datetime", "end_datetime", "status", "lock_level"];
   if (required.some((header) => !headers.includes(header))) {
-    setStatus("Schedule CSV is missing required placement columns", true);
+    setStatus("Bookings CSV is missing required existing_bookings.csv columns", true);
     return;
   }
   const imported = rows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] || ""])));
   const lessonById = new Map((appData.lessons || []).map((lesson) => [lesson.lesson_id, lesson]));
   const studentById = new Map((appData.students || []).map((student) => [student.student_id, student]));
   const venueById = new Map((appData.venues || []).map((venue) => [venue.venue_id, venue]));
+  const rowsById = lessonRowById();
   currentSolution = currentSolution || {status: "MANUAL", summary: {}, schedule: [], changes: [], warnings: []};
   currentSolution.status = "MANUAL";
   currentSolution.schedule = imported.map((row) => {
     const lesson = lessonById.get(row.lesson_id) || {};
-    const student = studentById.get(lesson.student_id) || {};
+    const studentId = row.student_id || lesson.student_id || "";
+    const student = studentById.get(studentId) || {};
     const venue = venueById.get(row.venue_id) || {};
+    const lessonRow = rowsById.get(row.lesson_id);
+    if (lessonRow) {
+      lessonRow.booking_id = row.booking_id || `book_${row.lesson_id}`;
+      lessonRow.booking_day = dayFromIso(row.start_datetime);
+      lessonRow.booking_start = timeFromIso(row.start_datetime);
+      lessonRow.booking_end = timeFromIso(row.end_datetime);
+      lessonRow.booking_status = row.status || "draft";
+      lessonRow.booking_lock_level = row.lock_level || "1";
+      lessonRow.booking_dirty = "TRUE";
+    }
     return {
       lesson_id: row.lesson_id,
-      student_id: lesson.student_id || "",
+      student_id: studentId,
       student_name: student.name || row.lesson_id,
       venue_id: row.venue_id,
       venue_name: venue.name || row.venue_id,
@@ -946,24 +1096,43 @@ async function importScheduleCsvFile(file) {
       preference_level: "manual",
       preference_score: 0,
       is_changed: true,
-      shared_session_id: row.shared_session_id || "",
+      shared_session_id: lesson.shared_session_id || "",
+      booking_status: row.status || "draft",
     };
   });
   currentSolution.summary = {
     ...(currentSolution.summary || {}),
     scheduled_lessons: currentSolution.schedule.length,
   };
-  updateLessonRowsFromSchedule(currentSolution.schedule, "draft", true);
   renderLessonTable(appData.lesson_rows || []);
   markDirty("lessons");
   renderCalendar(appData);
   await evaluateCurrentSchedule();
-  setStatus(`Imported ${currentSolution.schedule.length} schedule placement(s)`);
+  setStatus(`Imported ${currentSolution.schedule.length} booking row(s); click Save Lessons to persist`);
 }
 
 function formatErrorStatus(error, fallback) {
   const messages = (error.errors || []).map((item) => `row ${item.row} ${item.field}: ${item.message}`);
   return messages.join("; ") || fallback;
+}
+
+function cleanStudents() {
+  document.getElementById("studentTableBody").innerHTML = "";
+  markDirty("students");
+  setStatus("Students cleared; add or import students before saving", true);
+}
+
+function cleanLessons() {
+  document.getElementById("lessonTableBody").innerHTML = "";
+  appData.lesson_rows = [];
+  appData.lessons = [];
+  currentSolution = null;
+  evaluationResult = null;
+  markDirty("lessons");
+  renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
+  renderCalendar(appData);
+  renderDiagnostics();
+  setStatus("Lessons cleared; click Save Lessons to persist", true);
 }
 
 async function saveStudents() {
@@ -1059,20 +1228,94 @@ async function savePreferenceScores() {
   }
 }
 
+function resetConfigDefaults() {
+  renderConfigTable(appData.default_config_rows || []);
+  markDirty("config");
+  setStatus("Config reset to defaults in the editor; click Save Config to persist", true);
+}
+
+async function saveConfigParameters() {
+  setStatus("Saving config parameters...");
+  try {
+    await fetchJson("/api/config", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({rows: collectConfigRows()}),
+    });
+    clearDirty("config");
+    await loadData();
+    setStatus("Config parameters saved");
+  } catch (error) {
+    setStatus(formatErrorStatus(error, "Save config failed"), true);
+  }
+}
+
+async function saveRuntimeConfig() {
+  setStatus("Saving runtime config...");
+  const runtime = collectRuntimeConfig();
+  const byKey = new Map((appData.config_rows || []).map((row) => [row.key, {...row}]));
+  ["mode", "planning_start", "planning_end", "freeze_now"].forEach((key) => {
+    byKey.set(key, {key, value: runtime[key] || ""});
+  });
+  const rows = (appData.config_rows || []).map((row) => byKey.get(row.key));
+  ["mode", "planning_start", "planning_end", "slot_size_min", "max_solve_seconds", "freeze_now", "freeze_buffer_hours"].forEach((key) => {
+    if (!rows.some((row) => row.key === key) && byKey.has(key)) {
+      rows.push(byKey.get(key));
+    }
+  });
+  try {
+    await fetchJson("/api/config", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({rows}),
+    });
+    clearDirty("config");
+    await loadData();
+    setStatus("Runtime config saved");
+  } catch (error) {
+    setStatus(formatErrorStatus(error, "Save runtime config failed"), true);
+  }
+}
+
 async function runOptimizer() {
   setStatus("Running optimizer...");
+  const runtimeConfig = collectRuntimeConfig();
   try {
-    const payload = await fetchJson("/api/solve", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+    const payload = await fetchJson("/api/solve", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({runtime_config: runtimeConfig}),
+    });
     if (!payload.ok) {
+      if (payload.solution) {
+        currentSolution = structuredClone(payload.solution);
+      } else {
+        currentSolution = {
+          status: "VALIDATION_FAILED",
+          summary: null,
+          schedule: [],
+          changes: [],
+          warnings: payload.validation_warnings || [],
+        };
+      }
+      evaluationResult = null;
+      renderSummary(currentSolution, payload.validation_warnings || [], evaluationResult);
+      renderCalendar(appData);
+      renderDiagnostics();
       setStatus((payload.validation_warnings || []).join("; ") || "Validation failed", true);
       return;
     }
     await loadData();
+    appData.config = {...(appData.config || {}), ...runtimeConfig};
+    setRuntimeConfigControls(runtimeConfig);
     if (currentSolution && currentSolution.schedule) {
       updateLessonRowsFromSchedule(currentSolution.schedule, "draft", true);
       renderLessonTable(appData.lesson_rows || []);
       applyLessonRowsToSchedule();
       markDirty("lessons");
+      renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
+      renderCalendar(appData);
+      renderDiagnostics();
     }
     setStatus("Optimizer finished; review and save Lessons to persist draft booking times");
   } catch (error) {
@@ -1104,6 +1347,38 @@ async function importCsvFiles() {
   }
 }
 
+async function importStudentCsvFiles() {
+  const input = document.getElementById("studentCsvInput");
+  if (!input.files.length) {
+    setStatus("Choose students.csv, preferences.csv, or both first", true);
+    return;
+  }
+  const allowed = new Set(["students.csv", "preferences.csv"]);
+  const files = [...input.files];
+  const unsupported = files.filter((file) => !allowed.has(file.name));
+  if (unsupported.length) {
+    setStatus(`Students import only accepts students.csv and preferences.csv; rejected ${unsupported.map((file) => file.name).join(", ")}`, true);
+    input.value = "";
+    return;
+  }
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file, file.name));
+  setStatus("Importing student CSV files...");
+  try {
+    const payload = await fetchJson("/api/import-csv", {
+      method: "POST",
+      body: formData,
+    });
+    await loadData();
+    const warningCount = (payload.validation_warnings || []).length;
+    setStatus(`Imported ${payload.imported_files.join(", ")}${warningCount ? ` with ${warningCount} warning(s)` : ""}`);
+    input.value = "";
+  } catch (error) {
+    const messages = (error.errors || []).map((item) => `${item.field}: ${item.message}`);
+    setStatus(messages.join("; ") || "Student CSV import failed", true);
+  }
+}
+
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
@@ -1120,10 +1395,17 @@ document.getElementById("organizerSaveLessonsButton").addEventListener("click", 
 document.getElementById("saveVenuesButton").addEventListener("click", saveVenuesAndTravel);
 document.getElementById("saveTrainerButton").addEventListener("click", saveTrainerAvailability);
 document.getElementById("savePreferenceScoresButton").addEventListener("click", savePreferenceScores);
+document.getElementById("saveConfigButton").addEventListener("click", saveConfigParameters);
+document.getElementById("resetConfigButton").addEventListener("click", resetConfigDefaults);
+document.getElementById("saveRuntimeConfigButton").addEventListener("click", saveRuntimeConfig);
 document.getElementById("generateLessonsButton").addEventListener("click", generateLessonsFromStudents);
+document.getElementById("cleanStudentsButton").addEventListener("click", cleanStudents);
+document.getElementById("cleanLessonsButton").addEventListener("click", cleanLessons);
 document.getElementById("resetScheduleButton").addEventListener("click", resetSchedule);
-document.querySelectorAll("[data-temp-slot]").forEach((button) => {
-  button.addEventListener("click", () => useTemporarySolutionSlot(Number(button.dataset.tempSlot)));
+document.getElementById("saveSolutionButton").addEventListener("click", saveVisibleSolution);
+["runtimeMode", "runtimePlanningStart", "runtimePlanningEnd", "runtimeFreezeNow"].forEach((id) => {
+  document.getElementById(id).addEventListener("change", () => markDirty("config"));
+  document.getElementById(id).addEventListener("input", () => markDirty("config"));
 });
 document.getElementById("exportScheduleButton").addEventListener("click", exportScheduleCsv);
 document.getElementById("importScheduleButton").addEventListener("click", () => document.getElementById("scheduleCsvInput").click());
@@ -1135,6 +1417,12 @@ document.getElementById("scheduleCsvInput").addEventListener("change", (event) =
   event.target.value = "";
 });
 document.getElementById("importCsvButton").addEventListener("click", importCsvFiles);
+document.getElementById("importStudentCsvButton").addEventListener("click", () => document.getElementById("studentCsvInput").click());
+document.getElementById("studentCsvInput").addEventListener("change", (event) => {
+  if (event.target.files.length) {
+    importStudentCsvFiles().catch((error) => setStatus(JSON.stringify(error), true));
+  }
+});
 document.getElementById("addStudentButton").addEventListener("click", () => {
   const studentId = nextStudentId();
   const studentRow = {

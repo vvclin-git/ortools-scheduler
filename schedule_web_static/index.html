@@ -12,9 +12,6 @@
         <h1>Trainer Schedule Organizer</h1>
         <p id="statusText">Loading schedule data...</p>
       </div>
-      <div class="header-actions">
-        <button id="solveButton" type="button">Run Optimizer</button>
-      </div>
     </header>
 
     <main>
@@ -28,16 +25,38 @@
       </nav>
 
       <section id="organizerView" class="view active" aria-label="Weekly organizer">
+        <div class="runtime-config-bar" aria-label="Runtime solver config">
+          <label>
+            mode
+            <select id="runtimeMode">
+              <option value="weekly_planning">weekly_planning</option>
+              <option value="in_week_reschedule">in_week_reschedule</option>
+            </select>
+          </label>
+          <label>
+            planning_start
+            <input id="runtimePlanningStart" spellcheck="false">
+          </label>
+          <label>
+            planning_end
+            <input id="runtimePlanningEnd" spellcheck="false">
+          </label>
+          <label>
+            freeze_now
+            <input id="runtimeFreezeNow" spellcheck="false">
+          </label>
+          <button id="saveRuntimeConfigButton" class="secondary" type="button">Save Runtime Config</button>
+          <button id="solveButton" type="button">Run Optimizer</button>
+        </div>
         <div class="section-actions">
           <h2>Weekly Organizer</h2>
           <div class="button-row">
             <button id="organizerSaveLessonsButton" type="button">Save Lessons</button>
             <button id="resetScheduleButton" class="secondary" type="button">Reset</button>
-            <button class="secondary temp-slot" type="button" data-temp-slot="0">Slot 1 empty</button>
-            <button class="secondary temp-slot" type="button" data-temp-slot="1">Slot 2 empty</button>
-            <button class="secondary temp-slot" type="button" data-temp-slot="2">Slot 3 empty</button>
-            <button id="exportScheduleButton" class="secondary" type="button">Export Schedule CSV</button>
-            <button id="importScheduleButton" class="secondary" type="button">Import Schedule CSV</button>
+            <button id="saveSolutionButton" class="secondary" type="button">Save Solution</button>
+            <span id="savedSolutions" class="saved-solutions" aria-label="Saved solutions"></span>
+            <button id="exportScheduleButton" class="secondary" type="button">Export Bookings CSV</button>
+            <button id="importScheduleButton" class="secondary" type="button">Import Bookings CSV</button>
             <input id="scheduleCsvInput" class="visually-hidden" type="file" accept=".csv,text/csv">
           </div>
         </div>
@@ -53,7 +72,10 @@
           <div class="button-row">
             <button id="addStudentButton" class="secondary" type="button">Add Student</button>
             <button id="generateLessonsButton" class="secondary" type="button">Generate Lessons</button>
+            <button id="importStudentCsvButton" class="secondary" type="button">Import CSV</button>
+            <button id="cleanStudentsButton" class="secondary" type="button">Clean Students</button>
             <button id="saveStudentsButton" type="button">Save Students</button>
+            <input id="studentCsvInput" class="visually-hidden" type="file" accept=".csv,text/csv" multiple>
           </div>
         </div>
         <div class="input-table-wrap">
@@ -78,6 +100,7 @@
           <h2>Lessons</h2>
           <div class="button-row">
             <button id="addLessonButton" class="secondary" type="button">Add Lesson</button>
+            <button id="cleanLessonsButton" class="secondary" type="button">Clean Lessons</button>
             <button id="saveLessonsButton" type="button">Save Lessons</button>
           </div>
         </div>
@@ -179,6 +202,27 @@
                   </tr>
                 </thead>
                 <tbody id="trainerTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section>
+            <div class="section-actions">
+              <h2>Config Parameters</h2>
+              <div class="button-row">
+                <button id="resetConfigButton" class="secondary" type="button">Reset Defaults</button>
+                <button id="saveConfigButton" type="button">Save Config</button>
+              </div>
+            </div>
+            <div class="input-table-wrap">
+              <table class="input-table compact">
+                <thead>
+                  <tr>
+                    <th>key</th>
+                    <th>value</th>
+                  </tr>
+                </thead>
+                <tbody id="configTableBody"></tbody>
               </table>
             </div>
           </section>
@@ -302,6 +346,13 @@
         <td><input data-field="level" spellcheck="false" placeholder="preferred"></td>
         <td><input data-field="score" inputmode="numeric" spellcheck="false" placeholder="100"></td>
         <td><button class="icon-button remove-row" type="button" aria-label="Remove preference level">Remove</button></td>
+      </tr>
+    </template>
+
+    <template id="configRowTemplate">
+      <tr>
+        <td><input data-field="key" readonly spellcheck="false"></td>
+        <td><input data-field="value" spellcheck="false"></td>
       </tr>
     </template>
 

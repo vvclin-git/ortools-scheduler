@@ -1109,6 +1109,113 @@ class TrainerSolverMvpTests(unittest.TestCase):
             self.assertIn("preference_score_acceptable,50", config_text)
             self.assertEqual(students_before, (input_dir / "students.csv").read_text(encoding="utf-8"))
 
+    def test_web_build_api_data_includes_config_parameters(self) -> None:
+        """Setup should expose editable core config rows and default values."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            payload = schedule_web_app.build_api_data(input_dir, Path(temp_dir) / "missing.json")
+
+            config_keys = {row["key"] for row in payload["config_rows"]}
+            default_keys = {row["key"] for row in payload["default_config_rows"]}
+            self.assertIn("max_solve_seconds", config_keys)
+            self.assertIn("mode", config_keys)
+            self.assertEqual(config_keys, default_keys)
+
+    def test_web_save_config_parameters_preserves_preference_scores(self) -> None:
+        """Saving core Setup config should not remove preference score settings."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            result = schedule_web_app.save_config_parameters(
+                input_dir,
+                [
+                    {"key": "mode", "value": "weekly_planning"},
+                    {"key": "planning_start", "value": "2026-05-04T09:00:00"},
+                    {"key": "planning_end", "value": "2026-05-10T22:00:00"},
+                    {"key": "slot_size_min", "value": "30"},
+                    {"key": "max_solve_seconds", "value": "15.0"},
+                    {"key": "freeze_now", "value": "2026-05-06T14:00:00"},
+                    {"key": "freeze_buffer_hours", "value": "4"},
+                ],
+            )
+
+            config_text = (input_dir / "config.csv").read_text(encoding="utf-8")
+            self.assertTrue(result["ok"])
+            self.assertIn("mode,weekly_planning", config_text)
+            self.assertIn("max_solve_seconds,15.0", config_text)
+            self.assertIn("preference_score_preferred,100", config_text)
+
+    def test_web_save_config_parameters_rejects_invalid_values(self) -> None:
+        """Invalid solver config values should fail before writing config.csv."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            with self.assertRaises(schedule_web_app.WebInputError):
+                schedule_web_app.save_config_parameters(
+                    input_dir,
+                    [
+                        {"key": "mode", "value": "weekly_planning"},
+                        {"key": "planning_start", "value": "2026-05-04T09:00:00"},
+                        {"key": "planning_end", "value": "2026-05-10T22:00:00"},
+                        {"key": "slot_size_min", "value": "0"},
+                        {"key": "max_solve_seconds", "value": "15.0"},
+                        {"key": "freeze_now", "value": "2026-05-06T14:00:00"},
+                        {"key": "freeze_buffer_hours", "value": "4"},
+                    ],
+                )
+
+    def test_web_clear_solution_removes_stale_optimizer_output(self) -> None:
+        """CSV-changing web saves should be able to invalidate old solution JSON."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "solution.json"
+            output_path.write_text('{"status":"FEASIBLE","schedule":[]}', encoding="utf-8")
+
+            self.assertTrue(schedule_web_app.clear_solution(output_path))
+            self.assertFalse(output_path.exists())
+            self.assertFalse(schedule_web_app.clear_solution(output_path))
+
+    def test_web_runtime_config_overrides_request_without_writing_csv(self) -> None:
+        """Organizer runtime config values should affect only the in-memory solve request."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            csv_runner.create_csv_template(input_dir)
+            before = (input_dir / "config.csv").read_text(encoding="utf-8")
+            request = csv_runner.load_solver_request(input_dir)
+
+            updated = schedule_web_app.apply_runtime_config_overrides(
+                request,
+                {
+                    "mode": "weekly_planning",
+                    "planning_start": "2026-05-11T09:00:00",
+                    "planning_end": "2026-05-17T22:00:00",
+                    "freeze_now": "2026-05-12T10:00:00",
+                },
+            )
+
+            self.assertEqual(solver.SolverMode.WEEKLY_PLANNING, updated.config.mode)
+            self.assertEqual("2026-05-11T09:00:00", updated.config.planning_start)
+            self.assertEqual("2026-05-12T10:00:00", updated.config.freeze_policy.now)
+            self.assertEqual(before, (input_dir / "config.csv").read_text(encoding="utf-8"))
+
+    @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
+    def test_web_run_solver_records_solve_wall_time(self) -> None:
+        """Web optimizer output should include elapsed solve time in the summary."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            output_path = Path(temp_dir) / "solution.json"
+            csv_runner.create_csv_template(input_dir)
+
+            result = schedule_web_app.run_solver(input_dir, output_path)
+
+            self.assertIn("solve_wall_time_seconds", result["solution"]["summary"])
+            self.assertIsInstance(result["solution"]["summary"]["solve_wall_time_seconds"], float)
+            written = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertIn("solve_wall_time_seconds", written["summary"])
+
     def test_web_save_student_preferences_uses_configured_scores(self) -> None:
         """Saving Students should convert levels to configured numeric scores."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1628,6 +1735,14 @@ class TrainerSolverMvpTests(unittest.TestCase):
             self.assertEqual(["coach_availability.csv", "preferences.csv"], result["imported_files"])
             self.assertIn("Sat,09:00,12:00,0", (input_dir / "coach_availability.csv").read_text(encoding="utf-8"))
 
+    def test_web_import_route_reads_multipart_before_json_body(self) -> None:
+        """Multipart CSV uploads should not be parsed as JSON first."""
+        script = Path("schedule_web_app.py").read_text(encoding="utf-8")
+        import_index = script.index('if parsed.path == "/api/import-csv":')
+        json_index = script.index("payload = self.read_json_body()")
+
+        self.assertLess(import_index, json_index)
+
     def test_web_import_csv_files_rejects_unknown_file_name(self) -> None:
         """CSV upload should reject files outside the scheduler CSV contract."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1959,13 +2074,26 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn('data-view="lessons"', html)
         self.assertIn("saveStudentsButton", html)
         self.assertIn("generateLessonsButton", html)
+        self.assertIn("importStudentCsvButton", html)
+        self.assertIn("cleanStudentsButton", html)
+        self.assertIn("studentCsvInput", html)
         self.assertIn("saveLessonsButton", html)
+        self.assertIn("cleanLessonsButton", html)
         self.assertIn("organizerSaveLessonsButton", html)
-        self.assertIn('data-temp-slot="0"', html)
-        self.assertIn('data-temp-slot="1"', html)
-        self.assertIn('data-temp-slot="2"', html)
+        self.assertIn("saveSolutionButton", html)
+        self.assertIn("savedSolutions", html)
+        self.assertIn("runtimeMode", html)
+        self.assertIn("runtimePlanningStart", html)
+        self.assertIn("runtimePlanningEnd", html)
+        self.assertIn("runtimeFreezeNow", html)
+        self.assertIn("saveRuntimeConfigButton", html)
+        self.assertNotIn('data-temp-slot="0"', html)
         self.assertIn("saveVenuesButton", html)
         self.assertIn("saveTrainerButton", html)
+        self.assertIn("Config Parameters", html)
+        self.assertIn("configTableBody", html)
+        self.assertIn("saveConfigButton", html)
+        self.assertIn("resetConfigButton", html)
         self.assertIn("Preference Scores", html)
         self.assertIn("savePreferenceScoresButton", html)
         self.assertIn("preferenceScoreTableBody", html)
@@ -1981,15 +2109,30 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("draggable=\"true\"", script)
         self.assertIn("saveStudents", script)
         self.assertIn("saveLessons", script)
+        self.assertIn("importStudentCsvFiles", script)
+        self.assertIn("students.csv\", \"preferences.csv", script)
         self.assertIn('"/api/students/preferences"', script)
         self.assertIn('"/api/lessons"', script)
         self.assertIn("savePreferenceScores", script)
         self.assertIn("/api/preference-scores", script)
+        self.assertIn("saveConfigParameters", script)
+        self.assertIn("/api/config", script)
+        self.assertIn("saveRuntimeConfig", script)
+        self.assertIn("collectRuntimeConfig", script)
+        self.assertIn("runtime_config", script)
+        self.assertIn("resetConfigDefaults", script)
+        self.assertIn("cleanStudents", script)
+        self.assertIn("cleanLessons", script)
+        self.assertIn("payload.solution", script)
+        self.assertIn("Candidate count", script)
+        self.assertIn("Solve time", script)
         self.assertIn("generateLessonsFromStudents", script)
         self.assertIn("reconcileLessonsFromStudents", script)
-        self.assertIn("temporarySolutions", script)
+        self.assertIn("savedSolutions", script)
+        self.assertIn("MAX_SAVED_SOLUTIONS", script)
+        self.assertIn("window.confirm", script)
         self.assertIn("structuredClone(currentSolution)", script)
-        self.assertIn("useTemporarySolutionSlot", script)
+        self.assertIn("saveVisibleSolution", script)
         self.assertIn("appendGeneratedLessonForStudent", script)
         self.assertIn("restoreUnsavedLessonRows", script)
         self.assertIn('dirtySections.has("lessons") ? collectLessonRows() : null', script)
@@ -1999,7 +2142,8 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("syncScheduleToCurrentInput", script)
         self.assertIn("updated ${result.updatedCount} visible placement(s)", script)
         self.assertIn("resized ${result.resizedCount} visible placement(s)", script)
-        self.assertIn('"lesson_id", "start_datetime", "end_datetime", "venue_id", "shared_session_id"', script)
+        self.assertIn('"booking_id", "lesson_id", "student_id", "venue_id", "start_datetime", "end_datetime", "status", "lock_level"', script)
+        self.assertNotIn('"lesson_id", "start_datetime", "end_datetime", "venue_id", "shared_session_id"', script)
 
 
 if __name__ == "__main__":

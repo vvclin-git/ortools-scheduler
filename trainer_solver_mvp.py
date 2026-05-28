@@ -180,6 +180,7 @@ class SolverSummary:
     total_cross_venue_pair_penalty: int
     objective_value: Optional[int]
     candidate_count: int = 0
+    solve_wall_time_seconds: Optional[float] = None
 
 
 @dataclass(frozen=True)

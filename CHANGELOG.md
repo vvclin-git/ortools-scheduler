@@ -19,6 +19,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added `last_resort` preference score defaults, blank-preference expansion from
   trainer availability, Organizer `Save Lessons`, and three memory-only
   temporary Organizer solution slots.
+- Added Students-page CSV import for `students.csv` and `preferences.csv` test
+  files.
+- Added Students/Lessons clean buttons, editable Setup config parameters with
+  reset-to-defaults, and optimizer failure diagnostics in the Organizer text
+  panel.
+- Cleared stale `solution.json` after successful web input saves/imports so old
+  optimizer placements do not reappear after cleaning or regenerating lessons.
+- Switched Organizer schedule import/export to `existing_bookings.csv` format,
+  added runtime config controls, solve-time diagnostics, and dynamic saved
+  solution buttons.
 - Split the browser organizer into Organizer, Students, Lessons, and Setup
   pages with section-specific save actions.
 - Added editable lesson booking day, start, derived end, and status controls

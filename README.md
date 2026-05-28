@@ -105,11 +105,16 @@ folder, runs the optimizer, and visualizes the schedule in a weekly grid.
 Inputs are split across pages with page-owned save actions:
 
 - `Students`: edit students, default venues, and student preference windows,
-  set `lessons_per_week`, then click `Save Students`.
+  set `lessons_per_week`, import `students.csv`/`preferences.csv` test files,
+  clear the visible student editor with `Clean Students`, then click
+  `Save Students`.
 - `Lessons`: edit lesson requests plus scheduled booking day, start, derived
-  end, and status, then click `Save Lessons`.
+  end, and status, clear the visible lesson editor with `Clean Lessons`, then
+  click `Save Lessons`.
 - `Setup`: import CSV files, edit venues/travel, edit trainer timeslots, and
-  adjust preference level scores with separate save buttons.
+  adjust solver config parameters and preference level scores with separate
+  save buttons. `Reset Defaults` restores the config editor to the template
+  defaults; click `Save Config` to write those values to `config.csv`.
 
 Student preference text can use readable levels without numeric scores. The
 Setup page maps levels such as `preferred` and `acceptable` to solver scores,
@@ -122,19 +127,25 @@ trainer timeslots as `preferred`.
 The organizer also supports browser-local schedule review. Drag a scheduled
 session to another day or time to evaluate the manual placement immediately,
 review score and conflict diagnostics, reset back to the optimized solution, or
-export/import the visible schedule with a client-side placement CSV:
+export/import the visible schedule with the solver-readable booking CSV format:
 
 ```csv
-lesson_id,start_datetime,end_datetime,venue_id,shared_session_id
+booking_id,lesson_id,student_id,venue_id,start_datetime,end_datetime,status,lock_level
 ```
 
 Manual organizer edits do not rewrite scheduler CSV input unless you separately
 save the Lessons page, click `Save Lessons` in Organizer, or import scheduler
 CSV files. Dragging a lesson updates the in-memory Lessons booking time; either
 `Save Lessons` button persists it to `existing_bookings.csv`. The Organizer also
-has three memory-only temporary slots for live testing. Click an empty slot to
-save the current visible schedule; click a filled slot to switch back to it.
-Temporary slots are cleared by page refresh or app restart.
+has memory-only saved solutions for live testing. Click `Save Solution` to add
+a fast-switch button labeled with a schedule hash, score, and
+scheduled/unscheduled counts. Up to five saved solutions are kept; they are
+cleared by page refresh or app restart.
+
+Frequently changed runtime config values are available on the Organizer:
+`mode`, `planning_start`, `planning_end`, and `freeze_now`. These visible values
+are used immediately by `Run Optimizer` without first writing `config.csv`.
+Click `Save Runtime Config` only when you want those values persisted.
 
 Lesson time and status fields are booking edits, not lesson request fields.
 Blank day/start/status means the lesson has no current booking row. When set,
@@ -145,7 +156,16 @@ until the status is changed.
 
 After a successful optimizer run, scheduled solution times are loaded into the
 Lessons page as unsaved `draft` booking times. Review or edit them, then click
-`Save Lessons` to persist them to `existing_bookings.csv`.
+`Save Lessons` to persist them to `existing_bookings.csv`. If the optimizer
+returns validation errors or an infeasible result, the Organizer diagnostics
+panel shows the solver status, solve time, candidate count when available, and
+solver warnings so the failed run can be inspected without overwriting the
+previous usable `solution.json`.
+
+Any successful web save or scheduler CSV import clears the previous
+`solution.json` because the saved input may no longer match that optimizer
+output. Run the optimizer again to create a fresh solution, or use saved booking
+rows in `existing_bookings.csv` as the current manual schedule.
 
 When the web app starts, it normalizes old text IDs into numeric CSV IDs. Student
 IDs become `1001`, `1002`, and so on; lesson IDs become values like `1001-1`.

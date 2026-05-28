@@ -69,10 +69,36 @@ button:hover {
   color: var(--accent-dark);
 }
 
-.temp-slot.filled {
+.saved-solution-button {
   background: #eaf7f3;
   border-color: #287c71;
   color: #1f6b61;
+}
+
+.saved-solutions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.runtime-config-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(190px, 1fr)) auto auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 14px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.runtime-config-bar label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .icon-button {

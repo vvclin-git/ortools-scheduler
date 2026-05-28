@@ -140,6 +140,11 @@ preference_score_last_resort,20
 They convert readable preference levels such as `preferred` or `acceptable`
 into the numeric `score` values written to `preferences.csv`.
 
+In the web app, Setup exposes the core solver keys in an editable Config
+Parameters table. `Reset Defaults` restores the template values in the editor,
+and `Save Config` writes those core keys back to `config.csv` while preserving
+the separate `preference_score_<level>` rows.
+
 ### students.csv
 
 Students who may receive lessons.
@@ -299,6 +304,10 @@ Fri,10:00,22:00,10
 
 Current bookings used for rescheduling scenarios. If omitted, the solver treats
 the problem as a fresh schedule.
+
+The web Organizer imports and exports this same format for user-managed
+schedules. Imported rows are loaded for review first; click `Save Lessons` in
+the web app to persist them back to `existing_bookings.csv`.
 
 | column | required | example | meaning |
 |---|---:|---|---|

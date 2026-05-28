@@ -8,7 +8,8 @@ import csv
 import json
 import re
 import shutil
-from dataclasses import asdict
+import time
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -20,6 +21,7 @@ from run_solver_from_csv import (
     CsvInputError,
     OPTIONAL_FILES,
     REQUIRED_FILES,
+    TEMPLATE_ROWS,
     load_absences,
     load_coach_availability,
     load_config,
@@ -35,7 +37,9 @@ from run_solver_from_csv import (
     write_json,
 )
 from trainer_solver_mvp import (
+    FreezePolicy,
     LessonRequest,
+    SolverMode,
     StudentPreference,
     build_travel_lookup,
     get_coach_availability_score,
@@ -54,6 +58,20 @@ VISIBLE_BOOKING_STATUSES = {"draft", "confirmed", "completed", "locked"}
 ACCEPTED_BOOKING_STATUSES = {*VISIBLE_BOOKING_STATUSES, "in_progress"}
 FIXED_UI_BOOKING_STATUSES = {"completed", "locked", "in_progress"}
 DEFAULT_PREFERENCE_SCORES = {"preferred": 100, "acceptable": 60, "last_resort": 20}
+CORE_CONFIG_KEYS = [
+    "mode",
+    "planning_start",
+    "planning_end",
+    "slot_size_min",
+    "max_solve_seconds",
+    "freeze_now",
+    "freeze_buffer_hours",
+]
+CONFIG_DEFAULTS = {
+    row["key"]: row["value"]
+    for row in TEMPLATE_ROWS["config.csv"]
+    if row["key"] in CORE_CONFIG_KEYS
+}
 STUDENT_HEADERS = ["student_id", "name", "default_venue_id", "priority", "lessons_per_week"]
 LESSON_HEADERS = ["lesson_id", "student_id", "venue_id", "duration_min", "must_schedule", "priority", "shared_session_id"]
 BOOKING_HEADERS = ["booking_id", "lesson_id", "student_id", "venue_id", "start_datetime", "end_datetime", "status", "lock_level"]
@@ -137,6 +155,23 @@ def build_preference_score_rows(input_dir: Path) -> List[Dict[str, str]]:
     return [
         {"level": level, "score": str(score)}
         for level, score in sorted(load_preference_score_map(input_dir).items())
+    ]
+
+
+def default_config_parameter_rows() -> List[Dict[str, str]]:
+    """Build default editable core config rows for the Setup page."""
+    return [{"key": key, "value": CONFIG_DEFAULTS[key]} for key in CORE_CONFIG_KEYS]
+
+
+def build_config_parameter_rows(input_dir: Path) -> List[Dict[str, str]]:
+    """Build editable core config rows, merging missing keys from defaults."""
+    raw_values = {
+        row.get("key", ""): row.get("value", "")
+        for row in read_csv_rows(input_dir / "config.csv")
+    }
+    return [
+        {"key": key, "value": raw_values.get(key, CONFIG_DEFAULTS[key])}
+        for key in CORE_CONFIG_KEYS
     ]
 
 
@@ -290,6 +325,14 @@ def read_solution(output_path: Path) -> Optional[Dict[str, Any]]:
         return None
     with output_path.open("r", encoding="utf-8-sig") as file:
         return json.load(file)
+
+
+def clear_solution(output_path: Path) -> bool:
+    """Remove stale optimizer output after CSV input has changed."""
+    if not output_path.exists():
+        return False
+    output_path.unlink()
+    return True
 
 
 def write_csv_rows(path: Path, headers: List[str], rows: List[Dict[str, str]]) -> None:
@@ -562,8 +605,10 @@ def build_api_data(input_dir: Path, output_path: Path) -> Dict[str, Any]:
         request = load_solver_request(input_dir)
         validation_warnings = validate_solver_request(request)
         config_payload = {
+            "mode": request.config.mode.value,
             "planning_start": request.config.planning_start,
             "planning_end": request.config.planning_end,
+            "freeze_now": request.config.freeze_policy.now if request.config.freeze_policy else "",
         }
     except Exception as exc:
         validation_warnings = [str(exc)]
@@ -576,6 +621,8 @@ def build_api_data(input_dir: Path, output_path: Path) -> Dict[str, Any]:
         "lesson_rows": build_lesson_rows(input_dir),
         "trainer_availability_rows": build_trainer_availability_rows(input_dir),
         "preference_score_rows": build_preference_score_rows(input_dir),
+        "config_rows": build_config_parameter_rows(input_dir),
+        "default_config_rows": default_config_parameter_rows(),
         "students": [asdict(item) for item in load_students(input_dir)],
         "venues": [asdict(item) for item in load_venues(input_dir)],
         "travel_times": [asdict(item) for item in load_travel_times(input_dir)],
@@ -725,6 +772,131 @@ def save_preference_scores(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[
     retained.extend({"key": key, "value": value} for key, value in sorted(score_keys.items()))
     write_csv_rows(input_dir / "config.csv", ["key", "value"], retained)
     return {"ok": True, "preference_score_rows": len(parsed_rows)}
+
+
+def validate_config_parameter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Validate editable core solver config rows."""
+    errors: List[Dict[str, Any]] = []
+    parsed_by_key: Dict[str, str] = {}
+    allowed = set(CORE_CONFIG_KEYS)
+
+    if not rows:
+        raise WebInputError([{"row": 0, "field": "config", "message": "At least one config row is required"}])
+
+    for row_index, raw in enumerate(rows, start=1):
+        key = str(raw.get("key", "")).strip()
+        value = str(raw.get("value", "")).strip()
+        if key not in allowed:
+            errors.append({"row": row_index, "field": "key", "message": f"Unknown config key={key}"})
+            continue
+        if key in parsed_by_key:
+            errors.append({"row": row_index, "field": "key", "message": f"Duplicate config key={key}"})
+            continue
+        parsed_by_key[key] = value
+
+    for key in CORE_CONFIG_KEYS:
+        if key not in parsed_by_key:
+            parsed_by_key[key] = CONFIG_DEFAULTS[key]
+
+    if parsed_by_key["mode"] not in {"weekly_planning", "in_week_reschedule"}:
+        errors.append({"row": 0, "field": "mode", "message": "mode must be weekly_planning or in_week_reschedule"})
+    try:
+        planning_start = parse_dt(parsed_by_key["planning_start"])
+        planning_end = parse_dt(parsed_by_key["planning_end"])
+        if planning_end <= planning_start:
+            errors.append({"row": 0, "field": "planning_end", "message": "planning_end must be after planning_start"})
+    except ValueError as exc:
+        errors.append({"row": 0, "field": "planning_start", "message": str(exc)})
+    try:
+        slot_size = int(parsed_by_key["slot_size_min"])
+        if slot_size <= 0:
+            raise ValueError
+    except ValueError:
+        errors.append({"row": 0, "field": "slot_size_min", "message": "slot_size_min must be a positive integer"})
+    try:
+        max_seconds = float(parsed_by_key["max_solve_seconds"])
+        if max_seconds <= 0:
+            raise ValueError
+    except ValueError:
+        errors.append({"row": 0, "field": "max_solve_seconds", "message": "max_solve_seconds must be a positive number"})
+    if parsed_by_key["freeze_now"]:
+        try:
+            parse_dt(parsed_by_key["freeze_now"])
+        except ValueError as exc:
+            errors.append({"row": 0, "field": "freeze_now", "message": str(exc)})
+    try:
+        freeze_buffer_hours = int(parsed_by_key["freeze_buffer_hours"])
+        if freeze_buffer_hours < 0:
+            raise ValueError
+    except ValueError:
+        errors.append({"row": 0, "field": "freeze_buffer_hours", "message": "freeze_buffer_hours must be a non-negative integer"})
+
+    if errors:
+        raise WebInputError(errors)
+    return [{"key": key, "value": parsed_by_key[key]} for key in CORE_CONFIG_KEYS]
+
+
+def save_config_parameters(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Validate and write core solver config settings into config.csv."""
+    parsed_rows = validate_config_parameter_rows(rows)
+    config_rows = read_csv_rows(input_dir / "config.csv")
+    core_keys = set(CORE_CONFIG_KEYS)
+    retained = [row for row in config_rows if row.get("key", "") not in core_keys]
+    write_csv_rows(input_dir / "config.csv", ["key", "value"], parsed_rows + retained)
+    return {"ok": True, "config_rows": len(parsed_rows)}
+
+
+def apply_runtime_config_overrides(request: Any, overrides: Dict[str, Any]) -> Any:
+    """Apply Organizer runtime config values to a loaded request without writing CSV."""
+    if not overrides:
+        return request
+
+    errors: List[Dict[str, Any]] = []
+    allowed = {"mode", "planning_start", "planning_end", "freeze_now"}
+    unknown = sorted(set(overrides) - allowed)
+    if unknown:
+        errors.append({"row": 0, "field": "runtime_config", "message": f"Unknown runtime config key(s): {', '.join(unknown)}"})
+
+    mode_text = str(overrides.get("mode", request.config.mode.value)).strip()
+    planning_start = str(overrides.get("planning_start", request.config.planning_start)).strip()
+    planning_end = str(overrides.get("planning_end", request.config.planning_end)).strip()
+    freeze_now = str(overrides.get("freeze_now", request.config.freeze_policy.now if request.config.freeze_policy else "")).strip()
+
+    try:
+        mode = SolverMode(mode_text)
+    except ValueError:
+        mode = request.config.mode
+        errors.append({"row": 0, "field": "mode", "message": "mode must be weekly_planning or in_week_reschedule"})
+    try:
+        start_dt = parse_dt(planning_start)
+        end_dt = parse_dt(planning_end)
+        if end_dt <= start_dt:
+            errors.append({"row": 0, "field": "planning_end", "message": "planning_end must be after planning_start"})
+    except ValueError as exc:
+        errors.append({"row": 0, "field": "planning_start", "message": str(exc)})
+    if freeze_now:
+        try:
+            parse_dt(freeze_now)
+        except ValueError as exc:
+            errors.append({"row": 0, "field": "freeze_now", "message": str(exc)})
+
+    if errors:
+        raise WebInputError(errors)
+
+    freeze_policy = None
+    if freeze_now:
+        freeze_policy = FreezePolicy(
+            now=freeze_now,
+            freeze_buffer_hours=request.config.freeze_policy.freeze_buffer_hours if request.config.freeze_policy else 4,
+        )
+    config = replace(
+        request.config,
+        mode=mode,
+        planning_start=planning_start,
+        planning_end=planning_end,
+        freeze_policy=freeze_policy,
+    )
+    return replace(request, config=config)
 
 
 def parse_web_bool(value: Any) -> bool:
@@ -1022,14 +1194,18 @@ def save_trainer_availability(input_dir: Path, rows: List[Dict[str, Any]]) -> Di
     return {"ok": True, "trainer_availability_rows": len(parsed_rows)}
 
 
-def run_solver(input_dir: Path, output_path: Path) -> Dict[str, Any]:
+def run_solver(input_dir: Path, output_path: Path, runtime_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Load CSV input, run the optimizer, write JSON, and return the response."""
     request = load_solver_request(input_dir)
+    request = apply_runtime_config_overrides(request, runtime_config or {})
     validation_warnings = validate_solver_request(request)
     if validation_warnings:
         return {"ok": False, "validation_warnings": validation_warnings}
+    started = time.perf_counter()
     response = solve_schedule(request)
     payload = asdict(response)
+    elapsed = round(time.perf_counter() - started, 3)
+    payload.setdefault("summary", {})["solve_wall_time_seconds"] = elapsed
     if response.status not in {"OPTIMAL", "FEASIBLE"}:
         return {"ok": False, "validation_warnings": response.warnings, "solution": payload}
     write_json(output_path, payload)
@@ -1219,49 +1395,72 @@ class ScheduleWebHandler(SimpleHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         try:
+            if parsed.path == "/api/import-csv":
+                result = import_csv_files(self.input_dir, self.read_multipart_files())
+                result["solution_cleared"] = clear_solution(self.output_path)
+                self.send_json(result)
+                return
             payload = self.read_json_body()
             if parsed.path == "/api/students/preferences":
                 rows = payload.get("rows", [])
                 if not isinstance(rows, list):
                     raise WebInputError([{"row": 0, "field": "rows", "message": "rows must be a list"}])
-                self.send_json(save_student_preferences(self.input_dir, rows))
+                result = save_student_preferences(self.input_dir, rows)
+                result["solution_cleared"] = clear_solution(self.output_path)
+                self.send_json(result)
                 return
             if parsed.path == "/api/lessons":
                 rows = payload.get("rows", [])
                 if not isinstance(rows, list):
                     raise WebInputError([{"row": 0, "field": "rows", "message": "rows must be a list"}])
-                self.send_json(save_lessons(self.input_dir, rows))
+                result = save_lessons(self.input_dir, rows)
+                result["solution_cleared"] = clear_solution(self.output_path)
+                self.send_json(result)
                 return
             if parsed.path == "/api/venues/travel":
                 venue_rows = payload.get("venues", [])
                 travel_rows = payload.get("travel_times", [])
                 if not isinstance(venue_rows, list) or not isinstance(travel_rows, list):
                     raise WebInputError([{"row": 0, "field": "venues", "message": "venues and travel_times must be lists"}])
-                self.send_json(save_venues_and_travel_times(self.input_dir, venue_rows, travel_rows))
+                result = save_venues_and_travel_times(self.input_dir, venue_rows, travel_rows)
+                result["solution_cleared"] = clear_solution(self.output_path)
+                self.send_json(result)
                 return
             if parsed.path == "/api/trainer-availability":
                 rows = payload.get("rows", [])
                 if not isinstance(rows, list):
                     raise WebInputError([{"row": 0, "field": "rows", "message": "rows must be a list"}])
-                self.send_json(save_trainer_availability(self.input_dir, rows))
+                result = save_trainer_availability(self.input_dir, rows)
+                result["solution_cleared"] = clear_solution(self.output_path)
+                self.send_json(result)
                 return
             if parsed.path == "/api/preference-scores":
                 rows = payload.get("rows", [])
                 if not isinstance(rows, list):
                     raise WebInputError([{"row": 0, "field": "rows", "message": "rows must be a list"}])
-                self.send_json(save_preference_scores(self.input_dir, rows))
+                result = save_preference_scores(self.input_dir, rows)
+                result["solution_cleared"] = clear_solution(self.output_path)
+                self.send_json(result)
+                return
+            if parsed.path == "/api/config":
+                rows = payload.get("rows", [])
+                if not isinstance(rows, list):
+                    raise WebInputError([{"row": 0, "field": "rows", "message": "rows must be a list"}])
+                result = save_config_parameters(self.input_dir, rows)
+                result["solution_cleared"] = clear_solution(self.output_path)
+                self.send_json(result)
                 return
             if parsed.path == "/api/solve":
-                self.send_json(run_solver(self.input_dir, self.output_path))
+                runtime_config = payload.get("runtime_config", {})
+                if not isinstance(runtime_config, dict):
+                    raise WebInputError([{"row": 0, "field": "runtime_config", "message": "runtime_config must be an object"}])
+                self.send_json(run_solver(self.input_dir, self.output_path, runtime_config))
                 return
             if parsed.path == "/api/evaluate-schedule":
                 rows = payload.get("schedule", [])
                 if not isinstance(rows, list):
                     raise WebInputError([{"row": 0, "field": "schedule", "message": "schedule must be a list"}])
                 self.send_json(evaluate_schedule(self.input_dir, rows))
-                return
-            if parsed.path == "/api/import-csv":
-                self.send_json(import_csv_files(self.input_dir, self.read_multipart_files()))
                 return
             self.send_json({"error": "Unknown endpoint"}, HTTPStatus.NOT_FOUND)
         except WebInputError as exc:
