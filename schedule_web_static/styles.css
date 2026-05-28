@@ -377,6 +377,12 @@ h3 {
   background: #fff8e7;
 }
 
+.tray-lesson.selected {
+  outline: 2px solid #111827;
+  outline-offset: -2px;
+  background: #fff8e7;
+}
+
 .lesson-block:active,
 .tray-lesson:active {
   cursor: grabbing;
@@ -433,6 +439,14 @@ h3 {
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.lesson-issue {
+  display: block;
+  margin-top: 4px;
+  color: #9a3412;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .input-table {

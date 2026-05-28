@@ -7,6 +7,7 @@ let currentSolution = null;
 let evaluationResult = null;
 let draggedGroupKey = null;
 let selectedGroupKey = null;
+let selectedTrayKey = null;
 let calendarBackgroundMode = "trainer";
 let trayVisible = true;
 const dirtySections = new Set();
@@ -592,11 +593,10 @@ function preferenceClassForCell(day, mark) {
   if (calendarBackgroundMode !== "preference") {
     return "";
   }
-  const group = selectedGroup();
-  if (!group) {
+  const studentIds = selectedPreferenceStudentIds();
+  if (!studentIds.size) {
     return "";
   }
-  const studentIds = new Set(group.items.map((item) => item.student_id));
   const levels = {preferred: 3, acceptable: 2, last_resort: 1};
   let bestLevel = "";
   let bestRank = 0;
@@ -620,6 +620,22 @@ function preferenceClassForCell(day, mark) {
 function selectedGroup() {
   return lessonGroups(currentSolution, appData ? appData.lessons || [] : [])
     .find((group) => group.key === selectedGroupKey) || null;
+}
+
+function selectedTrayGroup() {
+  return selectedTrayKey ? trayGroupByKey(selectedTrayKey) : null;
+}
+
+function selectedPreferenceStudentIds() {
+  const group = selectedGroup();
+  if (group) {
+    return new Set(group.items.map((item) => item.student_id));
+  }
+  const trayGroup = selectedTrayGroup();
+  if (trayGroup) {
+    return new Set(trayGroup.lessons.map((lesson) => lesson.student_id));
+  }
+  return new Set();
 }
 
 function updateSelectedStatusControl() {
@@ -679,6 +695,21 @@ function unscheduledLessonGroups() {
 
 function trayGroupByKey(key) {
   return unscheduledLessonGroups().find((group) => group.key === key) || null;
+}
+
+function diagnosticIssuesByLesson() {
+  const byLesson = new Map();
+  (evaluationResult && evaluationResult.diagnostics ? evaluationResult.diagnostics : []).forEach((message) => {
+    const lessonId = String(message).split(":")[0].trim();
+    if (!lessonId) {
+      return;
+    }
+    if (!byLesson.has(lessonId)) {
+      byLesson.set(lessonId, []);
+    }
+    byLesson.get(lessonId).push(message);
+  });
+  return byLesson;
 }
 
 function currentLesson(item) {
@@ -845,7 +876,7 @@ function renderUnscheduledTray() {
     const duration = Math.max(...group.lessons.map((lesson) => Number(lesson.duration_min) || 60));
     const label = group.shared_session_id ? `shared ${group.shared_session_id}` : group.lessons[0].lesson_id;
     return `
-        <tr class="tray-lesson" draggable="true" data-tray-key="${esc(group.key)}">
+        <tr class="tray-lesson ${group.key === selectedTrayKey ? "selected" : ""}" draggable="true" data-tray-key="${esc(group.key)}">
           <td>${esc(label)}</td>
           <td>${esc(names)}</td>
           <td>${esc(duration)} min</td>
@@ -859,6 +890,15 @@ function renderUnscheduledTray() {
       draggedGroupKey = block.dataset.trayKey;
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", draggedGroupKey);
+    });
+    block.addEventListener("click", () => {
+      selectedTrayKey = block.dataset.trayKey;
+      selectedGroupKey = null;
+      if (calendarBackgroundMode !== "preference") {
+        calendarBackgroundMode = "preference";
+        document.getElementById("calendarBackgroundMode").value = calendarBackgroundMode;
+      }
+      renderCalendar(appData);
     });
   });
 }
@@ -882,6 +922,7 @@ function renderCalendar(data) {
   const grid = document.getElementById("calendarGrid");
   const available = availabilityMap(data.coach_availability || []);
   const groupsByCell = new Map();
+  const issuesByLesson = diagnosticIssuesByLesson();
   const blocks = [];
 
   lessonGroups(currentSolution, data.lessons || []).forEach((group) => {
@@ -920,6 +961,9 @@ function renderCalendar(data) {
         const status = first.booking_status || "manual";
         const statusClass = `status-${status || "manual"}`;
         const selectedClass = group.key === selectedGroupKey ? "selected" : "";
+        const issues = group.items.flatMap((item) => issuesByLesson.get(item.lesson_id) || []);
+        const issueText = issues.length ? issues[0].split(":").slice(1).join(":").trim() || issues[0] : "";
+        const issueHtml = issueText ? `<span class="lesson-issue">${esc(issueText)}</span>` : "";
         const dayIndex = DAYS.indexOf(day);
         const startIndex = Math.floor((mark - START_HOUR * 60) / 30);
         const rowSpan = Math.max(1, Math.ceil(groupDuration(group) / 30));
@@ -928,6 +972,7 @@ function renderCalendar(data) {
             <span class="lesson-title">${esc(names)}</span>
             <span class="lesson-status">${esc(status)}</span>
             <span class="lesson-meta">${esc(timeFromIso(first.start_datetime))}-${esc(timeFromIso(first.end_datetime))} - ${esc(first.venue_name)}</span>
+            ${issueHtml}
           </div>`);
       });
       html += `</div>`;
@@ -943,6 +988,7 @@ function bindCalendarDragHandlers() {
   document.querySelectorAll(".lesson-block").forEach((block) => {
     block.addEventListener("click", () => {
       selectedGroupKey = block.dataset.groupKey;
+      selectedTrayKey = null;
       renderCalendar(appData);
     });
     block.addEventListener("dragstart", (event) => {
@@ -1008,6 +1054,7 @@ async function moveGroupTo(groupKey, day, startMinute) {
       ...(currentSolution.schedule || []).filter((item) => !movedIds.has(item.lesson_id)),
       ...movedItems,
     ];
+    selectedTrayKey = null;
   } else {
     const group = lessonGroups(currentSolution, appData.lessons || []).find((item) => item.key === groupKey);
     if (!group) {
@@ -1087,6 +1134,7 @@ async function evaluateCurrentSchedule() {
 function resetSchedule() {
   currentSolution = appData.solution ? structuredClone(appData.solution) : null;
   selectedGroupKey = null;
+  selectedTrayKey = null;
   syncScheduleToCurrentInput();
   if (currentSolution && currentSolution.schedule) {
     updateLessonRowsFromSchedule(currentSolution.schedule, "draft", true);
@@ -1127,6 +1175,7 @@ async function cleanSchedule() {
   currentSolution = null;
   evaluationResult = null;
   selectedGroupKey = null;
+  selectedTrayKey = null;
   savedSolutions.length = 0;
   renderLessonTable(appData.lesson_rows || []);
   renderSavedSolutions();
