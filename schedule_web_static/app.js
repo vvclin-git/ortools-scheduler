@@ -283,10 +283,8 @@ function defaultVenueForStudent(row) {
   return appData.venues && appData.venues[0] ? appData.venues[0].venue_id : "";
 }
 
-function appendGeneratedLessonForStudent(studentRow) {
+function appendGeneratedLessonForStudent(studentRow, sharedSessionId = "") {
   const existingStudent = (appData.students || []).find((student) => student.student_id === studentRow.student_id);
-  const couple = studentRow.couple || "";
-  const coupleSize = collectRows().filter((row) => row.couple && row.couple === couple).length;
   appendRow("lessonTableBody", "lessonRowTemplate", {
     lesson_id: nextLessonIdForStudent(studentRow.student_id),
     student_id: studentRow.student_id,
@@ -294,7 +292,7 @@ function appendGeneratedLessonForStudent(studentRow) {
     duration_min: "60",
     must_schedule: "FALSE",
     priority: String(existingStudent ? existingStudent.priority : 1),
-    shared_session_id: coupleSize > 1 ? couple : "",
+    shared_session_id: sharedSessionId,
     booking_day: "",
     booking_start: "",
     booking_end: "",
@@ -302,6 +300,19 @@ function appendGeneratedLessonForStudent(studentRow) {
     booking_lock_level: "1",
   });
   markDirty("lessons");
+}
+
+function sharedSessionForGeneratedLesson(studentRow, lessonIndex, studentRows) {
+  const couple = studentRow.couple || "";
+  if (!couple) {
+    return "";
+  }
+  const group = studentRows.filter((row) => row.couple && row.couple === couple);
+  if (group.length < 2) {
+    return "";
+  }
+  const sharedCount = Math.min(...group.map((row) => Math.max(0, Number(row.lessons_per_week) || 1)));
+  return lessonIndex < sharedCount ? couple : "";
 }
 
 function renderTable(rows) {
@@ -452,7 +463,7 @@ function reconcileLessonsFromStudents() {
     const targetCount = Math.max(0, Number(studentRow.lessons_per_week) || 1);
     const currentCount = lessonRows.filter((lessonRow) => lessonRow.student_id === studentRow.student_id).length;
     for (let index = currentCount; index < targetCount; index += 1) {
-      appendGeneratedLessonForStudent(studentRow);
+      appendGeneratedLessonForStudent(studentRow, sharedSessionForGeneratedLesson(studentRow, index, studentRows));
       lessonRows.push({student_id: studentRow.student_id, lesson_id: nextLessonIdForStudent(studentRow.student_id)});
       created += 1;
     }
@@ -699,15 +710,25 @@ function trayGroupByKey(key) {
 
 function diagnosticIssuesByLesson() {
   const byLesson = new Map();
-  (evaluationResult && evaluationResult.diagnostics ? evaluationResult.diagnostics : []).forEach((message) => {
-    const lessonId = String(message).split(":")[0].trim();
-    if (!lessonId) {
-      return;
-    }
+  const addIssue = (lessonId, message) => {
     if (!byLesson.has(lessonId)) {
       byLesson.set(lessonId, []);
     }
     byLesson.get(lessonId).push(message);
+  };
+  (evaluationResult && evaluationResult.diagnostics ? evaluationResult.diagnostics : []).forEach((message) => {
+    const text = String(message);
+    const pairMatch = text.match(/^([^:]+?)\s+(?:to|and)\s+([^:]+?):/);
+    if (pairMatch) {
+      addIssue(pairMatch[1].trim(), text);
+      addIssue(pairMatch[2].trim(), text);
+      return;
+    }
+    const lessonId = text.split(":")[0].trim();
+    if (!lessonId || lessonId.startsWith("Row ")) {
+      return;
+    }
+    addIssue(lessonId, text);
   });
   return byLesson;
 }

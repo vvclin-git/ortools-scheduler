@@ -222,7 +222,8 @@ h2 {
 }
 
 .calendar-shell {
-  display: block;
+  display: flex;
+  align-items: stretch;
   overflow: hidden;
 }
 
@@ -236,11 +237,15 @@ h2 {
 }
 
 .unscheduled-tray {
-  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+  width: 380px;
+  min-width: 260px;
+  max-width: 720px;
+  border-right: 1px solid var(--line);
   background: #f9faf7;
   padding: 10px;
   overflow: auto;
-  max-height: 220px;
+  resize: horizontal;
 }
 
 .tray-heading {
@@ -275,6 +280,7 @@ h3 {
 }
 
 .calendar-scroll {
+  flex: 1 1 auto;
   overflow: auto;
   min-width: 0;
   width: 100%;
@@ -536,6 +542,10 @@ textarea {
   }
 
   .unscheduled-tray {
+    width: 100%;
+    max-width: none;
+    border-right: 0;
     border-bottom: 1px solid var(--line);
+    resize: none;
   }
 }
