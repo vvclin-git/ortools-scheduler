@@ -51,6 +51,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Organizer calendar rows, header summary, unscheduled tray text, compact
+  import/export toolbar labels, and surrounding controls now scale with the
+  viewport so the full daily timeslot range is visible without the previous
+  oversized vertical grid.
 - Optimizer results now load into the Lessons page as unsaved draft booking
   times so users can review before persisting them.
 - Students `Generate Lessons` now regenerates lesson rows from the current

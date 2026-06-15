@@ -167,6 +167,9 @@ The Organizer page supports manual schedule review and repair:
 
 - Drag scheduled sessions to another day/time and drag unscheduled lessons from
   the left-side resizable tray into the calendar.
+- Review the full daily timeslot range in a compact Organizer layout that
+  scales the calendar row height and surrounding controls to the browser
+  viewport.
 - Click a scheduled block to change its status; status changes are saved
   immediately for that session/group.
 - Switch the calendar background between trainer availability and the selected
