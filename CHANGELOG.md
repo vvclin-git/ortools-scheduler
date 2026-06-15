@@ -8,52 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Added `lessons_per_week` student planning metadata plus a Students-page
-  lesson generation workflow.
+- Added a local browser organizer split into Organizer, Students, Lessons, and
+  Setup pages with section-specific save actions.
+- Added Organizer manual scheduling: drag/drop calendar editing, a left-side
+  resizable unscheduled lesson tray, immediate schedule evaluation, visible
+  diagnostics on blocks, reset, saved in-browser solution snapshots, and
+  booking CSV import/export using `existing_bookings.csv`.
+- Added Organizer controls for selected-session status saving, booking status
+  coloring, trainer-availability versus selected-student preference backgrounds,
+  current-week runtime date/time inputs, solve-time diagnostics, and an
+  Organizer-side `Save Lessons`.
+- Added editable Students and Lessons workflows: `lessons_per_week`, `couple`,
+  student CSV import, compact preference text parsing, Setup-managed preference
+  scores, `last_resort` defaults, generated lessons, shared-session editing,
+  lesson booking fields, and bulk required/optional controls.
+- Added data ownership cleanup behavior: `Clean Students` clears students,
+  preferences, lessons, bookings, and stale solutions; `Clean Lessons` clears
+  lessons, bookings, and stale solutions; `Clean Schedule` clears booking times
+  and persists immediately.
+- Added staged CSV import validation so failed imports do not partially
+  overwrite active input files; student-scoped CSV import clears old
+  lessons/bookings to avoid orphan data.
 - Added automatic web-app startup migration from text IDs to numeric student
   and lesson IDs with timestamped CSV backups.
-- Added organizer lesson-block coloring and labels for booking statuses.
-- Added Setup preference score mapping for readable student preference levels.
-- Added flexible Students timeslot text with weekday ranges, compact times, and
-  trainer-timeslot expansion for weekday-only entries.
-- Added `last_resort` preference score defaults, blank-preference expansion from
-  trainer availability, Organizer `Save Lessons`, and three memory-only
-  temporary Organizer solution slots.
-- Added Students-page CSV import for `students.csv` and `preferences.csv` test
-  files.
-- Added Students-page loading and saving for the `couple` grouping column, with
-  generated lessons using shared group values as `shared_session_id`.
-- Added an Organizer unscheduled lesson tray, Clean Schedule, selected-session
-  status saving, preference-background mode, current-week runtime date inputs,
-  duration-aware calendar blocks, and Lessons bulk required/optional controls.
-- Updated `run_web_app.cmd` to default to port `8001` and open the organizer in
-  the default browser automatically.
-- Added Students/Lessons clean buttons, editable Setup config parameters with
-  reset-to-defaults, and optimizer failure diagnostics in the Organizer text
-  panel.
-- Cleared stale `solution.json` after successful web input saves/imports so old
-  optimizer placements do not reappear after cleaning or regenerating lessons.
-- Switched Organizer schedule import/export to `existing_bookings.csv` format,
-  added runtime config controls, solve-time diagnostics, and dynamic saved
-  solution buttons.
-- Split the browser organizer into Organizer, Students, Lessons, and Setup
-  pages with section-specific save actions.
-- Added editable lesson booking day, start, derived end, and status controls
-  backed by `existing_bookings.csv`.
-- Added browser-local drag-and-drop schedule editing with immediate manual
-  schedule evaluation, diagnostics, reset, and placement CSV import/export.
-- Added a lesson editor to the local browser organizer, including student and
-  venue dropdowns plus shared-session editing.
+- Added `run_web_app.cmd` as a Windows shortcut that starts the app on port
+  `8001` and opens the default browser automatically.
 - Added a read-only `/api/evaluate-schedule` endpoint for scoring manual
   schedules without writing solver output.
-- Added `run_web_app.cmd` as a Windows shortcut for launching the local browser
-  schedule organizer with the demo CSV input.
-- Added a local browser schedule organizer with a standard-library Python web
-  server, CSV-backed student availability editing, optimizer execution, and a
-  weekly grid output view.
-- Added frontend editing for students, venues, venue travel times, and trainer
-  timeslots.
-- Added frontend CSV import for supported scheduler input files.
 - Documented commute setup by modeling `home` as a normal venue in the existing
   travel-time matrix.
 - Added `--print-solution` to print a compact terminal schedule and change
@@ -72,6 +53,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Optimizer results now load into the Lessons page as unsaved draft booking
   times so users can review before persisting them.
+- Students `Generate Lessons` now regenerates lesson rows from the current
+  student/couple plan with index-specific shared session IDs, creates shared
+  rows only up to the smallest group lesson count, defaults generated lessons
+  to optional, and clears old bookings.
+- Successful web saves and scheduler CSV imports now clear stale
+  `solution.json` so old optimizer placements do not reappear after input
+  changes.
 - Added solver-side request validation for duplicate IDs, missing references,
   invalid planning windows, invalid durations, bad day/time values, unknown
   booking or absence values, and negative travel times.
@@ -81,6 +69,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Expanded the input data format documentation into a test-data preparation
   guide with file order, column definitions, examples, scenario ideas, and
   validation checks.
+- Clarified the command-line/no-UI workflow and corrected the limitations
+  section to distinguish the local browser organizer from missing production
+  service features.
 - Clarified that student and venue display names support Traditional Chinese
   when CSV files are saved as UTF-8.
 
@@ -91,6 +82,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Made the browser organizer apply current lesson input details to visible
   placements after saving, including venue, student, shared-session, and
   duration changes.
+- Fixed calendar block sizing so scheduled lessons fill their occupied
+  timeslots without distorting the time column.
+- Fixed status changes and student imports that could move scheduled lessons
+  back into the unscheduled tray by preserving/clearing dependent state
+  consistently.
 - Prevented failed web optimizer runs from overwriting the last usable
   `solution.json` with an empty infeasible schedule.
 - Added a clearer infeasible-input warning when required shared lessons have no
@@ -105,14 +101,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Tested
 
-- Expanded the unit suite to 41 tests, covering solver validation,
+- Expanded the unit suite to 82 passing tests, covering solver validation,
   fixed-booking conflicts, optional lessons, CLI solution printing, CSV
   template creation, overwrite protection, validation-only mode, web frontend
   parser behavior, CSV save validation, solve output shape, and weekly-grid
   payload data.
 - Added backend coverage for venue/travel-time editing and trainer timeslot
   validation.
-- Added backend coverage for CSV import success and invalid upload rejection.
+- Added backend coverage for CSV import success, invalid upload rejection,
+  staged import rollback, student-scoped import cleanup, and clean
+  Students/Lessons cascades.
+- Updated web tests to derive active fixture IDs from the copied CSV data
+  instead of hardcoding demo IDs; migration tests keep intentional `1001`
+  assertions for old text-ID normalization.
 
 ## [0.1.0] - 2026-04-26
 

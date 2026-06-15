@@ -87,6 +87,45 @@ The ICS export includes lesson events and transparent trainer-availability
 events. Shared lessons are grouped into one event, and any lesson outside coach
 availability is prefixed with `[OUTSIDE AVAILABILITY]`.
 
+### Command-Line Workflow
+
+The solver can be used without the browser UI. In this workflow, edit the CSV
+files directly, validate them, then run the optimizer from the terminal.
+
+1. Create or copy an input folder containing the required CSV files.
+
+   ```bash
+   uv run python run_solver_from_csv.py --init-template my_schedule_input
+   ```
+
+2. Edit the CSV files in a text editor, Excel, or Google Sheets. Keep one sheet
+   per CSV file if using a spreadsheet, then export each sheet back to CSV.
+
+3. Validate the input without solving.
+
+   ```bash
+   uv run python run_solver_from_csv.py --input my_schedule_input --validate-only
+   ```
+
+4. Run the solver and review output in the terminal.
+
+   ```bash
+   uv run python run_solver_from_csv.py --input my_schedule_input --output solution.json --print-summary --print-solution
+   ```
+
+5. Optionally write debug and calendar files.
+
+   ```bash
+   uv run python run_solver_from_csv.py --input my_schedule_input --output solution.json --dump-request request_debug.json --output-ics schedule.ics --print-summary
+   ```
+
+The command-line path writes `solution.json` and optional artifacts only. It
+does not apply browser cleanup actions such as `Clean Students`, `Clean
+Lessons`, or staged CSV import; those are web-app workflows. To avoid stale data
+without the UI, edit or clear dependent CSV files directly. For example, after
+replacing `students.csv`, also update or clear `preferences.csv`, `lessons.csv`,
+and `existing_bookings.csv`.
+
 Run the local browser organizer:
 
 ```bash
@@ -106,12 +145,11 @@ folder, runs the optimizer, and visualizes the schedule in a weekly grid.
 Inputs are split across pages with page-owned save actions:
 
 - `Students`: edit students, default venues, and student preference windows,
-  set `lessons_per_week` and optional `couple` grouping keys, import
-  `students.csv`/`preferences.csv` test files, clear the visible student editor
-  with `Clean Students`, then click `Save Students`.
+  set `lessons_per_week`, set optional `couple` grouping keys, import
+  `students.csv`/`preferences.csv`, and generate lesson rows from the current
+  student plan.
 - `Lessons`: edit lesson requests plus scheduled booking day, start, derived
-  end, and status, clear the visible lesson editor with `Clean Lessons`, then
-  click `Save Lessons`.
+  end, status, required/optional state, venue, and shared-session grouping.
 - `Setup`: import CSV files, edit venues/travel, edit trainer timeslots, and
   adjust solver config parameters and preference level scores with separate
   save buttons. `Reset Defaults` restores the config editor to the template
@@ -125,39 +163,55 @@ defaulting to `100`, `60`, and `20` for `preferred`, `acceptable`, and
 preference text and weekday entries without an explicit time use the matching
 trainer timeslots as `preferred`.
 
-The organizer also supports browser-local schedule review. Drag a scheduled
-session to another day or time to evaluate the manual placement immediately,
-drag unscheduled lessons from the tray into the calendar, switch the calendar
-background between trainer availability and selected-student preferences,
-review score and conflict diagnostics, reset back to the optimized solution, or
-export/import the visible schedule with the solver-readable booking CSV format:
+The Organizer page supports manual schedule review and repair:
+
+- Drag scheduled sessions to another day/time and drag unscheduled lessons from
+  the left-side resizable tray into the calendar.
+- Click a scheduled block to change its status; status changes are saved
+  immediately for that session/group.
+- Switch the calendar background between trainer availability and the selected
+  student's preference windows. Preference mode uses different colors for
+  `preferred`, `acceptable`, and `last_resort`.
+- Review score and conflict diagnostics in the diagnostics panel and directly
+  on affected calendar blocks.
+- Reset to the optimized solution, save temporary in-browser solution snapshots,
+  or export/import the visible schedule with the solver-readable booking CSV
+  format:
 
 ```csv
 booking_id,lesson_id,student_id,venue_id,start_datetime,end_datetime,status,lock_level
 ```
 
-Manual organizer edits do not rewrite scheduler CSV input unless you separately
-save the Lessons page, click `Save Lessons` in Organizer, or import scheduler
-CSV files. Dragging a lesson updates the in-memory Lessons booking time; either
-`Save Lessons` button persists it to `existing_bookings.csv`. The Organizer also
-has memory-only saved solutions for live testing. Click `Save Solution` to add
-a fast-switch button labeled with a schedule hash, score, and
-scheduled/unscheduled counts. Up to five saved solutions are kept; they are
-cleared by page refresh or app restart.
+Manual organizer edits update the in-memory Lessons booking fields first.
+Either `Save Lessons` button persists those booking fields to
+`existing_bookings.csv`. `Save Solution` creates up to five memory-only
+fast-switch snapshots labeled with a schedule hash, score, and
+scheduled/unscheduled counts; snapshots are cleared by page refresh or app
+restart.
 
 Frequently changed runtime config values are available on the Organizer:
-`mode`, `planning_start`, `planning_end`, and `freeze_now`. These visible values
-use date/time inputs, default to the current week, and are used immediately by
-`Run Optimizer` without writing `config.csv`.
+`mode`, `planning_start`, `planning_end`, and `freeze_now`. These values use
+date/time inputs, default to the current week, and are sent only to `Run
+Optimizer`; they do not rewrite `config.csv`.
 
 Lesson time and status fields are booking edits, not lesson request fields.
 Blank day/start/status means the lesson has no current booking row. When set,
 the UI writes one booking row per lesson, using `book_<lesson_id>` for new
-bookings. The status options shown in the app are `draft`, `confirmed`,
-`completed`, and `locked`; completed and locked rows keep their time fixed
-until the status is changed.
-Organizer status changes on a selected scheduled block save immediately. Clean
-Schedule clears all booking times and saves the cleared lesson rows immediately.
+bookings. The app exposes `draft`, `confirmed`, `completed`, and `locked`;
+completed and locked rows keep their time fixed until the status is changed.
+
+Data cleanup follows ownership rules to avoid old data mixing with new data:
+
+- `Clean Students` immediately clears students, preferences, lessons, bookings,
+  and stale solution data.
+- `Clean Lessons` immediately clears lessons, bookings, and stale solution
+  data.
+- `Clean Schedule` immediately clears only booking times/statuses and persists
+  the cleared booking state.
+- Student CSV import replaces students/preferences and clears old
+  lessons/bookings.
+- General scheduler CSV import validates files in a temporary staged copy
+  before replacing active CSV files.
 
 After a successful optimizer run, scheduled solution times are loaded into the
 Lessons page as unsaved `draft` booking times. Review or edit them, then click
@@ -180,12 +234,14 @@ References in preferences, lessons, bookings, student absences, and
 
 The Students page can create lesson rows from each student's `lessons_per_week`
 plan. `Add Student` creates a numeric student row and one matching unscheduled
-lesson row immediately. `Generate Lessons` adds missing lesson rows until each
-student has the requested total count, then saves both Students and Lessons; it
-does not delete extra existing rows. When two or more students share the same
-non-blank `couple` value, generated lesson rows use that value as
-`shared_session_id`. New lesson rows default to optional; use the Lessons page
-bulk buttons to mark all visible lessons required or optional.
+lesson row immediately. `Generate Lessons` regenerates lesson rows from the
+current `lessons_per_week` and `couple` values, saves both Students and
+Lessons, and clears old booking times so stale lesson/session groupings do not
+survive student changes. When two or more students share the same non-blank
+`couple` value, generated lesson rows use indexed shared IDs such as `pair_a-1`
+only up to the smallest lesson count inside the group. New and generated lesson
+rows default to optional; use the Lessons page bulk buttons to mark all visible
+lessons required or optional.
 
 When lesson input changes affect duration, `Save Lessons` updates the visible
 organizer placements to match the current `duration_min` values before
@@ -289,17 +345,22 @@ Run the unit test suite:
 uv run python -m unittest test_trainer_solver_mvp.py -v
 ```
 
-The tests cover candidate generation, absence-driven rescheduling, locked
-bookings, confirmed-booking preservation, travel-time conflicts, freeze-buffer
-behavior, and infeasible required lessons.
+The suite currently has 82 tests covering solver behavior, CSV parsing and
+validation, terminal output, iCalendar export, web save paths, staged import
+rollback, data cleanup cascades, manual schedule evaluation, and fixture ID
+migration.
 
 ## Current Limitations and Future Work
 
-- This is an MVP solver module, not a full product or service.
-- There is no UI, API server, database integration, authentication, or deployment
+- This is still an MVP local scheduler, not a hosted multi-user product.
+- The browser organizer is a local standard-library web app; there is no
+  production API service, database integration, authentication, or deployment
   layer.
-- Input validation is intentionally lightweight and mostly handled by the CSV
-  loader and candidate generation path.
+- The command-line workflow has no interactive cleanup UI. CSV ownership rules
+  must be handled by editing dependent files directly.
+- Input validation exists in the CSV loader, solver request validation, and web
+  save paths, but production-grade diagnostics and recovery flows would need
+  more work.
 - Infeasible-case diagnostics are basic and should be expanded for production
   use.
 - Objective scoring is configurable but still simple; real deployments may need

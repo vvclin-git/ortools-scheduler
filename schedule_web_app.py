@@ -8,6 +8,7 @@ import csv
 import json
 import re
 import shutil
+import tempfile
 import time
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
@@ -15,7 +16,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from run_solver_from_csv import (
     CsvInputError,
@@ -73,6 +74,7 @@ CONFIG_DEFAULTS = {
     if row["key"] in CORE_CONFIG_KEYS
 }
 STUDENT_HEADERS = ["student_id", "name", "default_venue_id", "priority", "lessons_per_week", "couple"]
+PREFERENCE_HEADERS = ["student_id", "day", "start", "end", "level", "score"]
 LESSON_HEADERS = ["lesson_id", "student_id", "venue_id", "duration_min", "must_schedule", "priority", "shared_session_id"]
 BOOKING_HEADERS = ["booking_id", "lesson_id", "student_id", "venue_id", "start_datetime", "end_datetime", "status", "lock_level"]
 DAY_SPEC_RE = re.compile(r"^(?P<start>Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?:-(?P<end>Mon|Tue|Wed|Thu|Fri|Sat|Sun))?$")
@@ -343,6 +345,32 @@ def write_csv_rows(path: Path, headers: List[str], rows: List[Dict[str, str]]) -
     path.write_text(",".join(headers) + "\n", encoding="utf-8", newline="")
 
 
+def clear_student_owned_data(input_dir: Path, output_path: Path) -> Dict[str, Any]:
+    """Clear students and all child data that cannot safely outlive students."""
+    input_dir.mkdir(parents=True, exist_ok=True)
+    write_csv_rows(input_dir / "students.csv", STUDENT_HEADERS, [])
+    write_csv_rows(input_dir / "preferences.csv", PREFERENCE_HEADERS, [])
+    write_csv_rows(input_dir / "lessons.csv", LESSON_HEADERS, [])
+    write_csv_rows(input_dir / "existing_bookings.csv", BOOKING_HEADERS, [])
+    return {
+        "ok": True,
+        "cleared": ["students.csv", "preferences.csv", "lessons.csv", "existing_bookings.csv"],
+        "solution_cleared": clear_solution(output_path),
+    }
+
+
+def clear_lesson_owned_data(input_dir: Path, output_path: Path) -> Dict[str, Any]:
+    """Clear lessons and bookings without touching student/preferences data."""
+    input_dir.mkdir(parents=True, exist_ok=True)
+    write_csv_rows(input_dir / "lessons.csv", LESSON_HEADERS, [])
+    write_csv_rows(input_dir / "existing_bookings.csv", BOOKING_HEADERS, [])
+    return {
+        "ok": True,
+        "cleared": ["lessons.csv", "existing_bookings.csv"],
+        "solution_cleared": clear_solution(output_path),
+    }
+
+
 def read_csv_rows(path: Path, required: bool = True) -> List[Dict[str, str]]:
     """Read CSV rows for web-only maintenance tasks."""
     if not path.exists():
@@ -449,7 +477,7 @@ def normalize_numeric_ids(input_dir: Path, output_path: Path) -> Dict[str, Any]:
             row["entity_id"] = student_id_map.get(row.get("entity_id", ""), row.get("entity_id", ""))
 
     write_csv_rows(input_dir / "students.csv", STUDENT_HEADERS, student_rows)
-    write_csv_rows(input_dir / "preferences.csv", ["student_id", "day", "start", "end", "level", "score"], preference_rows)
+    write_csv_rows(input_dir / "preferences.csv", PREFERENCE_HEADERS, preference_rows)
     write_csv_rows(input_dir / "lessons.csv", LESSON_HEADERS, lesson_rows)
     write_csv_rows(input_dir / "existing_bookings.csv", BOOKING_HEADERS, booking_rows)
     write_csv_rows(input_dir / "absences.csv", ["entity_type", "entity_id", "start_datetime", "end_datetime", "reason"], absence_rows)
@@ -457,7 +485,7 @@ def normalize_numeric_ids(input_dir: Path, output_path: Path) -> Dict[str, Any]:
     return {"changed": True, "backup_dir": str(backup_dir)}
 
 
-def import_csv_files(input_dir: Path, files: Dict[str, bytes]) -> Dict[str, Any]:
+def import_csv_files(input_dir: Path, files: Dict[str, bytes], cascade_student_dependents: bool = False) -> Dict[str, Any]:
     """Validate and write uploaded scheduler CSV files into the active input folder."""
     if not files:
         raise WebInputError([{"row": 0, "field": "files", "message": "At least one CSV file is required"}])
@@ -500,16 +528,30 @@ def import_csv_files(input_dir: Path, files: Dict[str, bytes]) -> Dict[str, Any]
 
     input_dir.mkdir(parents=True, exist_ok=True)
     written = []
-    for file_name, content in files.items():
-        path = input_dir / file_name
-        path.write_bytes(content.replace(b"\r\n", b"\n"))
-        written.append(file_name)
+    cascaded_files: List[str] = []
+    with tempfile.TemporaryDirectory(prefix="scheduler_import_") as temp_name:
+        staging_dir = Path(temp_name)
+        for file_name in REQUIRED_FILES + OPTIONAL_FILES:
+            source = input_dir / file_name
+            if source.exists():
+                shutil.copy2(source, staging_dir / file_name)
+        for file_name, content in files.items():
+            (staging_dir / file_name).write_bytes(content.replace(b"\r\n", b"\n"))
+            written.append(file_name)
+        if cascade_student_dependents:
+            write_csv_rows(staging_dir / "lessons.csv", LESSON_HEADERS, [])
+            write_csv_rows(staging_dir / "existing_bookings.csv", BOOKING_HEADERS, [])
+            cascaded_files = ["lessons.csv", "existing_bookings.csv"]
 
-    request = load_solver_request(input_dir)
-    validation_warnings = validate_solver_request(request)
+        request = load_solver_request(staging_dir)
+        validation_warnings = validate_solver_request(request)
+
+        for file_name in sorted(set(written + cascaded_files)):
+            shutil.copy2(staging_dir / file_name, input_dir / file_name)
     return {
         "ok": True,
         "imported_files": sorted(written),
+        "cascaded_files": cascaded_files,
         "validation_warnings": validation_warnings,
     }
 
@@ -736,7 +778,7 @@ def save_student_preferences(input_dir: Path, rows: List[Dict[str, Any]]) -> Dic
     if preference_rows:
         write_csv(input_dir / "preferences.csv", preference_rows)
     else:
-        write_csv_rows(input_dir / "preferences.csv", ["student_id", "day", "start", "end", "level", "score"], [])
+        write_csv_rows(input_dir / "preferences.csv", PREFERENCE_HEADERS, [])
     return {"ok": True, "saved_rows": len(student_rows), "preference_rows": len(preference_rows)}
 
 
@@ -1405,11 +1447,22 @@ class ScheduleWebHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/api/import-csv":
-                result = import_csv_files(self.input_dir, self.read_multipart_files())
+                query = parse_qs(parsed.query)
+                result = import_csv_files(
+                    self.input_dir,
+                    self.read_multipart_files(),
+                    cascade_student_dependents=query.get("scope", [""])[0] == "students",
+                )
                 result["solution_cleared"] = clear_solution(self.output_path)
                 self.send_json(result)
                 return
             payload = self.read_json_body()
+            if parsed.path == "/api/clear-students":
+                self.send_json(clear_student_owned_data(self.input_dir, self.output_path))
+                return
+            if parsed.path == "/api/clear-lessons":
+                self.send_json(clear_lesson_owned_data(self.input_dir, self.output_path))
+                return
             if parsed.path == "/api/students/preferences":
                 rows = payload.get("rows", [])
                 if not isinstance(rows, list):

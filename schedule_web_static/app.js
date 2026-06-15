@@ -312,7 +312,7 @@ function sharedSessionForGeneratedLesson(studentRow, lessonIndex, studentRows) {
     return "";
   }
   const sharedCount = Math.min(...group.map((row) => Math.max(0, Number(row.lessons_per_week) || 1)));
-  return lessonIndex < sharedCount ? couple : "";
+  return lessonIndex < sharedCount ? `${couple}-${lessonIndex + 1}` : "";
 }
 
 function renderTable(rows) {
@@ -452,28 +452,39 @@ function syncLessonRowsFromDom() {
   }));
 }
 
-function reconcileLessonsFromStudents() {
+function generatedLessonRowsFromStudents() {
   const studentRows = collectRows();
-  const lessonRows = collectLessonRows();
-  let created = 0;
+  const rows = [];
   studentRows.forEach((studentRow) => {
     if (!studentRow.student_id) {
       return;
     }
     const targetCount = Math.max(0, Number(studentRow.lessons_per_week) || 1);
-    const currentCount = lessonRows.filter((lessonRow) => lessonRow.student_id === studentRow.student_id).length;
-    for (let index = currentCount; index < targetCount; index += 1) {
-      appendGeneratedLessonForStudent(studentRow, sharedSessionForGeneratedLesson(studentRow, index, studentRows));
-      lessonRows.push({student_id: studentRow.student_id, lesson_id: nextLessonIdForStudent(studentRow.student_id)});
-      created += 1;
+    const existingStudent = (appData.students || []).find((student) => student.student_id === studentRow.student_id);
+    for (let index = 0; index < targetCount; index += 1) {
+      rows.push({
+        lesson_id: `${studentRow.student_id}-${index + 1}`,
+        student_id: studentRow.student_id,
+        venue_id: defaultVenueForStudent(studentRow),
+        duration_min: "60",
+        must_schedule: "FALSE",
+        priority: String(existingStudent ? existingStudent.priority : 1),
+        shared_session_id: sharedSessionForGeneratedLesson(studentRow, index, studentRows),
+        booking_day: "",
+        booking_start: "",
+        booking_end: "",
+        booking_status: "",
+        booking_lock_level: "1",
+      });
     }
   });
-  return created;
+  return rows;
 }
 
 async function generateLessonsFromStudents() {
-  setStatus("Generating and saving lessons...");
-  const created = reconcileLessonsFromStudents();
+  setStatus("Regenerating and saving lessons...");
+  const generatedRows = generatedLessonRowsFromStudents();
+  renderLessonTable(generatedRows);
   syncLessonRowsFromDom();
   applyLessonRowsToSchedule();
   renderCalendar(appData);
@@ -491,11 +502,9 @@ async function generateLessonsFromStudents() {
     });
     clearDirty("lessons");
     await loadData();
-    setStatus(created ? `Generated and saved ${created} lesson row(s)` : "Lesson rows already matched plans; Students and Lessons saved");
+    setStatus(`Regenerated and saved ${generatedRows.length} lesson row(s); old bookings were cleared`);
   } catch (error) {
-    if (created) {
-      markDirty("lessons");
-    }
+    markDirty("lessons");
     setStatus(formatErrorStatus(error, "Generate lessons failed"), true);
   }
 }
@@ -1474,24 +1483,42 @@ function formatErrorStatus(error, fallback) {
   return messages.join("; ") || fallback;
 }
 
-function cleanStudents() {
-  document.getElementById("studentTableBody").innerHTML = "";
-  markDirty("students");
-  setStatus("Students cleared; add or import students before saving", true);
-}
-
-function cleanLessons() {
-  document.getElementById("lessonTableBody").innerHTML = "";
-  appData.lesson_rows = [];
-  appData.lessons = [];
+function clearScheduleState() {
   currentSolution = null;
   evaluationResult = null;
   selectedGroupKey = null;
-  markDirty("lessons");
-  renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
-  renderCalendar(appData);
-  renderDiagnostics();
-  setStatus("Lessons cleared; click Save Lessons to persist", true);
+  selectedTrayKey = null;
+}
+
+async function cleanStudents() {
+  setStatus("Clearing students, lessons, bookings, and solution...");
+  try {
+    await fetchJson("/api/clear-students", {method: "POST"});
+    clearScheduleState();
+    clearDirty("students");
+    clearDirty("lessons");
+    const result = await loadData();
+    renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
+    renderDiagnostics();
+    setStatus(`Students cleared; removed ${result.removedCount || 0} visible placement(s)`);
+  } catch (error) {
+    setStatus(formatErrorStatus(error, "Clean students failed"), true);
+  }
+}
+
+async function cleanLessons() {
+  setStatus("Clearing lessons, bookings, and solution...");
+  try {
+    await fetchJson("/api/clear-lessons", {method: "POST"});
+    clearScheduleState();
+    clearDirty("lessons");
+    const result = await loadData();
+    renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
+    renderDiagnostics();
+    setStatus(`Lessons cleared; removed ${result.removedCount || 0} visible placement(s)`);
+  } catch (error) {
+    setStatus(formatErrorStatus(error, "Clean lessons failed"), true);
+  }
 }
 
 function setAllMustSchedule(value) {
@@ -1506,16 +1533,24 @@ function setAllMustSchedule(value) {
 async function saveStudents() {
   setStatus("Saving students...");
   try {
-    const unsavedLessonRows = dirtySections.has("lessons") ? collectLessonRows() : null;
+    const beforeIds = new Set((appData.students || []).map((student) => student.student_id));
+    const afterIds = new Set(collectRows().map((row) => row.student_id).filter(Boolean));
+    const studentIdsChanged = beforeIds.size !== afterIds.size || [...beforeIds].some((studentId) => !afterIds.has(studentId));
+    const unsavedLessonRows = dirtySections.has("lessons") && !studentIdsChanged ? collectLessonRows() : null;
     await fetchJson("/api/students/preferences", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({rows: collectRows()}),
     });
+    if (studentIdsChanged) {
+      await fetchJson("/api/clear-lessons", {method: "POST"});
+      clearScheduleState();
+      clearDirty("lessons");
+    }
     clearDirty("students");
     await loadData();
     restoreUnsavedLessonRows(unsavedLessonRows);
-    setStatus("Students saved");
+    setStatus(studentIdsChanged ? "Students saved; lessons and bookings were cleared because student IDs changed" : "Students saved");
   } catch (error) {
     setStatus(formatErrorStatus(error, "Save students failed"), true);
   }
@@ -1706,13 +1741,16 @@ async function importStudentCsvFiles() {
   files.forEach((file) => formData.append("files", file, file.name));
   setStatus("Importing student CSV files...");
   try {
-    const payload = await fetchJson("/api/import-csv", {
+    const payload = await fetchJson("/api/import-csv?scope=students", {
       method: "POST",
       body: formData,
     });
     await loadData();
     const warningCount = (payload.validation_warnings || []).length;
-    setStatus(`Imported ${payload.imported_files.join(", ")}${warningCount ? ` with ${warningCount} warning(s)` : ""}`);
+    clearDirty("students");
+    clearDirty("lessons");
+    const cascaded = (payload.cascaded_files || []).length ? `; cleared ${payload.cascaded_files.join(", ")}` : "";
+    setStatus(`Imported ${payload.imported_files.join(", ")}${cascaded}${warningCount ? ` with ${warningCount} warning(s)` : ""}`);
     input.value = "";
   } catch (error) {
     const messages = (error.errors || []).map((item) => `${item.field}: ${item.message}`);
@@ -1739,8 +1777,12 @@ document.getElementById("savePreferenceScoresButton").addEventListener("click", 
 document.getElementById("saveConfigButton").addEventListener("click", saveConfigParameters);
 document.getElementById("resetConfigButton").addEventListener("click", resetConfigDefaults);
 document.getElementById("generateLessonsButton").addEventListener("click", generateLessonsFromStudents);
-document.getElementById("cleanStudentsButton").addEventListener("click", cleanStudents);
-document.getElementById("cleanLessonsButton").addEventListener("click", cleanLessons);
+document.getElementById("cleanStudentsButton").addEventListener("click", () => {
+  cleanStudents().catch((error) => setStatus(JSON.stringify(error), true));
+});
+document.getElementById("cleanLessonsButton").addEventListener("click", () => {
+  cleanLessons().catch((error) => setStatus(JSON.stringify(error), true));
+});
 document.getElementById("cleanScheduleButton").addEventListener("click", cleanSchedule);
 document.getElementById("resetScheduleButton").addEventListener("click", resetSchedule);
 document.getElementById("saveSolutionButton").addEventListener("click", saveVisibleSolution);
