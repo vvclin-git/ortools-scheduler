@@ -88,6 +88,85 @@ def write_old_id_web_fixture(input_dir: Path) -> None:
     )
 
 
+def write_travel_guardrail_fixture(input_dir: Path) -> None:
+    """Write a minimal fixture that can expose venue-switch travel conflicts."""
+    input_dir.mkdir(parents=True, exist_ok=True)
+    (input_dir / "config.csv").write_text(
+        "\n".join(
+            [
+                "key,value",
+                "mode,weekly_planning",
+                "planning_start,2026-05-04T09:00:00",
+                "planning_end,2026-05-10T22:00:00",
+                "slot_size_min,30",
+                "max_solve_seconds,5",
+                "freeze_now,",
+                "freeze_buffer_hours,4",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (input_dir / "students.csv").write_text(
+        "\n".join(
+            [
+                "student_id,name,default_venue_id,priority,lessons_per_week,couple",
+                "1001,Alice,gym_a,1,1,",
+                "1002,Bob,gym_b,1,1,",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (input_dir / "preferences.csv").write_text(
+        "\n".join(
+            [
+                "student_id,day,start,end,level,score",
+                "1001,Mon,18:00,19:00,preferred,100",
+                "1002,Mon,19:00,20:00,preferred,100",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (input_dir / "lessons.csv").write_text(
+        "\n".join(
+            [
+                "lesson_id,student_id,venue_id,duration_min,must_schedule,priority,shared_session_id",
+                "1001-1,1001,gym_a,60,TRUE,1,",
+                "1002-1,1002,gym_b,60,TRUE,1,",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (input_dir / "existing_bookings.csv").write_text(
+        "booking_id,lesson_id,student_id,venue_id,start_datetime,end_datetime,status,lock_level\n",
+        encoding="utf-8",
+    )
+    (input_dir / "venues.csv").write_text(
+        "venue_id,name\ngym_a,Gym A\ngym_b,Gym B\n",
+        encoding="utf-8",
+    )
+    (input_dir / "travel_times.csv").write_text(
+        "\n".join(
+            [
+                "from_venue_id,to_venue_id,travel_min",
+                "gym_a,gym_a,0",
+                "gym_b,gym_b,0",
+                "gym_a,gym_b,120",
+                "gym_b,gym_a,120",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (input_dir / "coach_availability.csv").write_text(
+        "day,start,end,score\nMon,18:00,20:00,0\n",
+        encoding="utf-8",
+    )
+
+
 def demo_lesson_rows(input_dir: Path, count: int = 4) -> list[dict[str, str]]:
     """Return editable lesson rows using IDs from the copied demo fixture."""
     rows = []
@@ -1149,6 +1228,10 @@ class TrainerSolverMvpTests(unittest.TestCase):
             default_keys = {row["key"] for row in payload["default_config_rows"]}
             self.assertIn("max_solve_seconds", config_keys)
             self.assertIn("mode", config_keys)
+            self.assertIn("freeze_buffer_hours", config_keys)
+            self.assertNotIn("planning_start", config_keys)
+            self.assertNotIn("planning_end", config_keys)
+            self.assertNotIn("freeze_now", config_keys)
             self.assertEqual(config_keys, default_keys)
 
     def test_web_save_config_parameters_preserves_preference_scores(self) -> None:
@@ -1161,11 +1244,8 @@ class TrainerSolverMvpTests(unittest.TestCase):
                 input_dir,
                 [
                     {"key": "mode", "value": "weekly_planning"},
-                    {"key": "planning_start", "value": "2026-05-04T09:00:00"},
-                    {"key": "planning_end", "value": "2026-05-10T22:00:00"},
                     {"key": "slot_size_min", "value": "30"},
                     {"key": "max_solve_seconds", "value": "15.0"},
-                    {"key": "freeze_now", "value": "2026-05-06T14:00:00"},
                     {"key": "freeze_buffer_hours", "value": "4"},
                 ],
             )
@@ -1187,11 +1267,8 @@ class TrainerSolverMvpTests(unittest.TestCase):
                     input_dir,
                     [
                         {"key": "mode", "value": "weekly_planning"},
-                        {"key": "planning_start", "value": "2026-05-04T09:00:00"},
-                        {"key": "planning_end", "value": "2026-05-10T22:00:00"},
                         {"key": "slot_size_min", "value": "0"},
                         {"key": "max_solve_seconds", "value": "15.0"},
-                        {"key": "freeze_now", "value": "2026-05-06T14:00:00"},
                         {"key": "freeze_buffer_hours", "value": "4"},
                     ],
                 )
@@ -1228,6 +1305,30 @@ class TrainerSolverMvpTests(unittest.TestCase):
             self.assertEqual("2026-05-11T09:00:00", updated.config.planning_start)
             self.assertEqual("2026-05-12T10:00:00", updated.config.freeze_policy.now)
             self.assertEqual(before, (input_dir / "config.csv").read_text(encoding="utf-8"))
+
+    def test_web_persist_runtime_config_writes_config_csv(self) -> None:
+        """Organizer runtime config persistence should rewrite config.csv keys in place."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            csv_runner.create_csv_template(input_dir)
+            request = csv_runner.load_solver_request(input_dir)
+            updated = schedule_web_app.apply_runtime_config_overrides(
+                request,
+                {
+                    "mode": "in_week_reschedule",
+                    "planning_start": "2026-05-11T09:00:00",
+                    "planning_end": "2026-05-17T22:00:00",
+                    "freeze_now": "2026-05-12T10:00:00",
+                },
+            )
+
+            schedule_web_app.persist_runtime_config(input_dir, updated)
+
+            config_text = (input_dir / "config.csv").read_text(encoding="utf-8")
+            self.assertIn("mode,in_week_reschedule", config_text)
+            self.assertIn("planning_start,2026-05-11T09:00:00", config_text)
+            self.assertIn("planning_end,2026-05-17T22:00:00", config_text)
+            self.assertIn("freeze_now,2026-05-12T10:00:00", config_text)
 
     @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
     def test_web_run_solver_records_solve_wall_time(self) -> None:
@@ -1845,8 +1946,13 @@ class TrainerSolverMvpTests(unittest.TestCase):
             )
 
             diagnostics = " ".join(result["diagnostics"])
+            critical = " ".join(result["critical"])
             self.assertIn("overlapping lessons", diagnostics)
             self.assertIn("shared lessons must use the same time and venue", diagnostics)
+            self.assertIn("overlapping lessons", critical)
+            self.assertIn("shared lessons must use the same time and venue", critical)
+            self.assertIn("outside student preference windows", " ".join(result["warnings"]))
+            self.assertNotIn("outside student preference windows", critical)
 
     def test_web_evaluate_schedule_clears_preference_warning_after_round_trip(self) -> None:
         """A manual placement moved back into preference windows should be clean again."""
@@ -1870,16 +1976,122 @@ class TrainerSolverMvpTests(unittest.TestCase):
             )
             non_preferred = schedule_web_app.evaluate_schedule(
                 input_dir,
-                [placement("2026-06-15T10:00", "2026-06-15T11:00")],
+                [placement("2026-06-15T13:00", "2026-06-15T14:00")],
             )
             restored = schedule_web_app.evaluate_schedule(
                 input_dir,
                 [placement("2026-06-15T19:00", "2026-06-15T20:00")],
             )
 
-            self.assertNotIn("outside student preference windows", " ".join(preferred["diagnostics"]))
-            self.assertIn("4001-2: outside student preference windows", " ".join(non_preferred["diagnostics"]))
-            self.assertNotIn("outside student preference windows", " ".join(restored["diagnostics"]))
+            self.assertNotIn("outside student preference windows", " ".join(preferred["warnings"]))
+            self.assertIn("4001-2: outside student preference windows", " ".join(non_preferred["warnings"]))
+            self.assertEqual([], non_preferred["critical"])
+            self.assertNotIn("outside student preference windows", " ".join(restored["warnings"]))
+
+    def test_web_save_lessons_blocks_infeasible_venue_switch(self) -> None:
+        """Saving lessons should reject manual bookings that break venue-travel feasibility."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            write_travel_guardrail_fixture(input_dir)
+
+            with self.assertRaises(schedule_web_app.WebInputError) as raised:
+                schedule_web_app.save_lessons(
+                    input_dir,
+                    [
+                        {
+                            "lesson_id": "1001-1",
+                            "student_id": "1001",
+                            "venue_id": "gym_a",
+                            "duration_min": "60",
+                            "must_schedule": "TRUE",
+                            "priority": "1",
+                            "shared_session_id": "",
+                            "booking_day": "Mon",
+                            "booking_start": "18:00",
+                            "booking_status": "draft",
+                            "booking_lock_level": "1",
+                        },
+                        {
+                            "lesson_id": "1002-1",
+                            "student_id": "1002",
+                            "venue_id": "gym_b",
+                            "duration_min": "60",
+                            "must_schedule": "TRUE",
+                            "priority": "1",
+                            "shared_session_id": "",
+                            "booking_day": "Mon",
+                            "booking_start": "19:00",
+                            "booking_status": "draft",
+                            "booking_lock_level": "1",
+                        },
+                    ],
+                )
+
+            self.assertIn("needs 120 minutes travel time", " ".join(item["message"] for item in raised.exception.errors))
+
+    def test_web_save_lessons_allows_warning_only_schedule(self) -> None:
+        """Saving lessons should allow non-blocking evaluator warnings."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+            row = first_demo_lesson_row(input_dir)
+            row.update(
+                {
+                    "booking_day": "Mon",
+                    "booking_start": "13:00",
+                    "booking_status": "draft",
+                    "booking_lock_level": "1",
+                }
+            )
+
+            result = schedule_web_app.save_lessons(input_dir, [row])
+
+            bookings_text = (input_dir / "existing_bookings.csv").read_text(encoding="utf-8")
+            self.assertTrue(result["ok"])
+            self.assertIn("2026-05-04T13:00:00", bookings_text)
+
+    def test_web_save_lessons_allows_feasible_venue_switch(self) -> None:
+        """Saving lessons should allow manual bookings when travel time remains feasible."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            write_travel_guardrail_fixture(input_dir)
+
+            result = schedule_web_app.save_lessons(
+                input_dir,
+                [
+                    {
+                        "lesson_id": "1001-1",
+                        "student_id": "1001",
+                        "venue_id": "gym_a",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                        "booking_day": "Mon",
+                        "booking_start": "18:00",
+                        "booking_status": "draft",
+                        "booking_lock_level": "1",
+                    },
+                    {
+                        "lesson_id": "1002-1",
+                        "student_id": "1002",
+                        "venue_id": "gym_b",
+                        "duration_min": "60",
+                        "must_schedule": "TRUE",
+                        "priority": "1",
+                        "shared_session_id": "",
+                        "booking_day": "Mon",
+                        "booking_start": "21:00",
+                        "booking_status": "draft",
+                        "booking_lock_level": "1",
+                    },
+                ],
+            )
+
+            bookings_text = (input_dir / "existing_bookings.csv").read_text(encoding="utf-8")
+            self.assertTrue(result["ok"])
+            self.assertIn("2026-05-04T18:00:00", bookings_text)
+            self.assertIn("2026-05-04T21:00:00", bookings_text)
 
     @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
     def test_web_run_solver_returns_solution_shape(self) -> None:
@@ -1943,7 +2155,9 @@ class TrainerSolverMvpTests(unittest.TestCase):
         """The static UI should include manual schedule controls and lesson editor hooks."""
         html = Path("schedule_web_static/index.html").read_text(encoding="utf-8")
         script = Path("schedule_web_static/app.js").read_text(encoding="utf-8")
+        css = Path("schedule_web_static/styles.css").read_text(encoding="utf-8")
 
+        self.assertIn('/styles.css?v=summary-layout', html)
         self.assertNotIn("saveButton", html)
         self.assertIn('data-view="students"', html)
         self.assertIn('data-view="lessons"', html)
@@ -1998,6 +2212,8 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("booking_start", html)
         self.assertIn("booking_status", html)
         self.assertIn("/api/evaluate-schedule", script)
+        self.assertIn("repeat(6, minmax(105px, 1fr))", css)
+        self.assertIn("width: min(800px, 100%)", css)
         self.assertIn("draggable=\"true\"", script)
         self.assertIn("saveStudents", script)
         self.assertIn("saveLessons", script)
@@ -2012,12 +2228,25 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertNotIn("saveRuntimeConfig", script)
         self.assertIn("collectRuntimeConfig", script)
         self.assertIn("runtime_config", script)
+        self.assertIn("currentWeekRuntimeValues", script)
+        self.assertNotIn('rows.get("planning_start")', script)
+        self.assertNotIn('rows.get("planning_end")', script)
+        self.assertIn("planning_start: currentWeek.planning_start", script)
+        self.assertIn("planning_end: currentWeek.planning_end", script)
+        self.assertIn("freeze_now: currentWeek.freeze_now", script)
         self.assertIn("resetConfigDefaults", script)
         self.assertIn("cleanStudents", script)
         self.assertIn("cleanLessons", script)
         self.assertIn("/api/clear-students", script)
         self.assertIn("/api/clear-lessons", script)
         self.assertIn("payload.solution", script)
+        self.assertIn('["Critical", criticalCount]', script)
+        self.assertIn('["Warnings", warningCount]', script)
+        self.assertNotIn('["Issues", issueCount]', script)
+        self.assertIn("Critical:", script)
+        self.assertIn("Warning:", script)
+        self.assertIn("evaluationResult.critical", script)
+        self.assertIn("Save solution blocked", script)
         self.assertIn("Candidate count", script)
         self.assertIn("Solve time", script)
         self.assertIn("generateLessonsFromStudents", script)

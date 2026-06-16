@@ -151,9 +151,10 @@ Inputs are split across pages with page-owned save actions:
 - `Lessons`: edit lesson requests plus scheduled booking day, start, derived
   end, status, required/optional state, venue, and shared-session grouping.
 - `Setup`: import CSV files, edit venues/travel, edit trainer timeslots, and
-  adjust solver config parameters and preference level scores with separate
-  save buttons. `Reset Defaults` restores the config editor to the template
-  defaults; click `Save Config` to write those values to `config.csv`.
+  adjust solver config parameters other than `planning_start`, `planning_end`,
+  and `freeze_now`, plus preference level scores, with separate save buttons.
+  `Reset Defaults` restores the config editor to the template defaults; click
+  `Save Config` to write those values to `config.csv`.
 
 Student preference text can use readable levels without numeric scores. The
 Setup page maps levels such as `preferred` and `acceptable` to solver scores,
@@ -181,8 +182,9 @@ The Organizer page supports manual schedule review and repair:
 - Use the preference hotzone background to see unweighted demand across all
   students, counting how many students prefer each visible 30-minute slot.
 - Review score and conflict diagnostics in the diagnostics panel and directly
-  on affected calendar blocks; diagnostics refresh after each visible
-  drag/drop placement so old preference warnings are not reused.
+  on affected calendar blocks; the top summary keeps separate critical and
+  warning counts in the same header row, and diagnostics refresh after each
+  visible drag/drop placement so old preference warnings are not reused.
 - Save temporary in-browser solution snapshots, clear only the current working
   calendar, or export/import the visible schedule with the solver-readable
   booking CSV format:
@@ -198,10 +200,22 @@ fast-switch snapshots labeled with a schedule hash, score, and
 scheduled/unscheduled counts; snapshots are cleared by page refresh or app
 restart.
 
+Manual evaluator feedback is split into blocking `Critical:` issues and
+non-blocking `Warning:` issues. `Save Lessons` and `Save Solution` both block
+critical schedule-feasibility conflicts before saving. That includes
+overlapping bookings, shared-session time or venue mismatches,
+venue-travel infeasibility, invalid rows or times, absence conflicts, and
+similar manual-schedule conflicts. Preference-window misses, coach-availability
+misses, and required lessons left out of the manual schedule still appear as
+warnings in the Organizer, but they do not block the save by themselves.
+
 Frequently changed runtime config values are available on the Organizer:
-`mode`, `planning_start`, `planning_end`, and `freeze_now`. These values use
-date/time inputs, default to the current week, and are sent only to `Run
-Optimizer`; they do not rewrite `config.csv`.
+`mode`, `planning_start`, `planning_end`, and `freeze_now`. The Organizer opens
+with `planning_start` and `planning_end` set to the current local week and
+`freeze_now` set to the current local date/time, even if `config.csv` contains
+older runtime dates. `Run Optimizer` validates the visible Organizer values,
+uses them for the solve request, and writes them back to `config.csv`, so the
+Organizer is the active editor for the planning horizon and freeze timestamp.
 
 Lesson time and status fields are booking edits, not lesson request fields.
 Blank day/start/status means the lesson has no current booking row. When set,

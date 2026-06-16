@@ -38,6 +38,7 @@ from run_solver_from_csv import (
     write_json,
 )
 from trainer_solver_mvp import (
+    ExistingBooking,
     FreezePolicy,
     LessonRequest,
     SolverMode,
@@ -67,6 +68,10 @@ CORE_CONFIG_KEYS = [
     "max_solve_seconds",
     "freeze_now",
     "freeze_buffer_hours",
+]
+SETUP_CONFIG_KEYS = [
+    key for key in CORE_CONFIG_KEYS
+    if key not in {"planning_start", "planning_end", "freeze_now"}
 ]
 CONFIG_DEFAULTS = {
     row["key"]: row["value"]
@@ -162,7 +167,7 @@ def build_preference_score_rows(input_dir: Path) -> List[Dict[str, str]]:
 
 def default_config_parameter_rows() -> List[Dict[str, str]]:
     """Build default editable core config rows for the Setup page."""
-    return [{"key": key, "value": CONFIG_DEFAULTS[key]} for key in CORE_CONFIG_KEYS]
+    return [{"key": key, "value": CONFIG_DEFAULTS[key]} for key in SETUP_CONFIG_KEYS]
 
 
 def build_config_parameter_rows(input_dir: Path) -> List[Dict[str, str]]:
@@ -173,7 +178,7 @@ def build_config_parameter_rows(input_dir: Path) -> List[Dict[str, str]]:
     }
     return [
         {"key": key, "value": raw_values.get(key, CONFIG_DEFAULTS[key])}
-        for key in CORE_CONFIG_KEYS
+        for key in SETUP_CONFIG_KEYS
     ]
 
 
@@ -829,7 +834,7 @@ def validate_config_parameter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str,
     """Validate editable core solver config rows."""
     errors: List[Dict[str, Any]] = []
     parsed_by_key: Dict[str, str] = {}
-    allowed = set(CORE_CONFIG_KEYS)
+    allowed = set(SETUP_CONFIG_KEYS)
 
     if not rows:
         raise WebInputError([{"row": 0, "field": "config", "message": "At least one config row is required"}])
@@ -845,19 +850,12 @@ def validate_config_parameter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str,
             continue
         parsed_by_key[key] = value
 
-    for key in CORE_CONFIG_KEYS:
+    for key in SETUP_CONFIG_KEYS:
         if key not in parsed_by_key:
             parsed_by_key[key] = CONFIG_DEFAULTS[key]
 
     if parsed_by_key["mode"] not in {"weekly_planning", "in_week_reschedule"}:
         errors.append({"row": 0, "field": "mode", "message": "mode must be weekly_planning or in_week_reschedule"})
-    try:
-        planning_start = parse_dt(parsed_by_key["planning_start"])
-        planning_end = parse_dt(parsed_by_key["planning_end"])
-        if planning_end <= planning_start:
-            errors.append({"row": 0, "field": "planning_end", "message": "planning_end must be after planning_start"})
-    except ValueError as exc:
-        errors.append({"row": 0, "field": "planning_start", "message": str(exc)})
     try:
         slot_size = int(parsed_by_key["slot_size_min"])
         if slot_size <= 0:
@@ -870,11 +868,6 @@ def validate_config_parameter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str,
             raise ValueError
     except ValueError:
         errors.append({"row": 0, "field": "max_solve_seconds", "message": "max_solve_seconds must be a positive number"})
-    if parsed_by_key["freeze_now"]:
-        try:
-            parse_dt(parsed_by_key["freeze_now"])
-        except ValueError as exc:
-            errors.append({"row": 0, "field": "freeze_now", "message": str(exc)})
     try:
         freeze_buffer_hours = int(parsed_by_key["freeze_buffer_hours"])
         if freeze_buffer_hours < 0:
@@ -884,16 +877,31 @@ def validate_config_parameter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str,
 
     if errors:
         raise WebInputError(errors)
-    return [{"key": key, "value": parsed_by_key[key]} for key in CORE_CONFIG_KEYS]
+    return [{"key": key, "value": parsed_by_key[key]} for key in SETUP_CONFIG_KEYS]
+
+
+def write_config_values(input_dir: Path, updates: Dict[str, str]) -> None:
+    """Persist selected config.csv keys while preserving unrelated rows."""
+    config_rows = read_csv_rows(input_dir / "config.csv")
+    seen = set()
+    written: List[Dict[str, str]] = []
+    for row in config_rows:
+        key = row.get("key", "")
+        if key in updates:
+            written.append({"key": key, "value": updates[key]})
+            seen.add(key)
+            continue
+        written.append({"key": key, "value": row.get("value", "")})
+    for key in CORE_CONFIG_KEYS:
+        if key in updates and key not in seen:
+            written.append({"key": key, "value": updates[key]})
+    write_csv_rows(input_dir / "config.csv", ["key", "value"], written)
 
 
 def save_config_parameters(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Validate and write core solver config settings into config.csv."""
     parsed_rows = validate_config_parameter_rows(rows)
-    config_rows = read_csv_rows(input_dir / "config.csv")
-    core_keys = set(CORE_CONFIG_KEYS)
-    retained = [row for row in config_rows if row.get("key", "") not in core_keys]
-    write_csv_rows(input_dir / "config.csv", ["key", "value"], parsed_rows + retained)
+    write_config_values(input_dir, {row["key"]: row["value"] for row in parsed_rows})
     return {"ok": True, "config_rows": len(parsed_rows)}
 
 
@@ -948,6 +956,20 @@ def apply_runtime_config_overrides(request: Any, overrides: Dict[str, Any]) -> A
         freeze_policy=freeze_policy,
     )
     return replace(request, config=config)
+
+
+def persist_runtime_config(input_dir: Path, request: Any) -> None:
+    """Write Organizer runtime config values back to config.csv."""
+    freeze_now = request.config.freeze_policy.now if request.config.freeze_policy else ""
+    write_config_values(
+        input_dir,
+        {
+            "mode": request.config.mode.value,
+            "planning_start": request.config.planning_start,
+            "planning_end": request.config.planning_end,
+            "freeze_now": freeze_now,
+        },
+    )
 
 
 def parse_web_bool(value: Any) -> bool:
@@ -1103,6 +1125,9 @@ def validate_lesson_rows(
 def save_lessons(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Validate and write lessons.csv and existing_bookings.csv."""
     parsed_lessons, parsed_bookings = validate_lesson_rows(input_dir, rows)
+    guardrail_errors = validate_saved_schedule_guardrail(input_dir, parsed_lessons, parsed_bookings)
+    if guardrail_errors:
+        raise WebInputError(guardrail_errors)
     write_csv_rows(
         input_dir / "lessons.csv",
         LESSON_HEADERS,
@@ -1249,6 +1274,7 @@ def run_solver(input_dir: Path, output_path: Path, runtime_config: Optional[Dict
     """Load CSV input, run the optimizer, write JSON, and return the response."""
     request = load_solver_request(input_dir)
     request = apply_runtime_config_overrides(request, runtime_config or {})
+    persist_runtime_config(input_dir, request)
     validation_warnings = validate_solver_request(request)
     if validation_warnings:
         return {"ok": False, "validation_warnings": validation_warnings}
@@ -1282,15 +1308,47 @@ def schedule_item_lesson(request_lessons: Dict[str, LessonRequest], item: Dict[s
     )
 
 
-def evaluate_schedule(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Score a manually arranged schedule without solving or writing files."""
-    request = load_solver_request(input_dir)
+def lesson_requests_from_rows(rows: List[Dict[str, str]]) -> List[LessonRequest]:
+    """Convert validated lessons.csv-style rows into lesson requests."""
+    return [
+        LessonRequest(
+            lesson_id=row["lesson_id"],
+            student_id=row["student_id"],
+            venue_id=row["venue_id"],
+            duration_min=int(row["duration_min"]),
+            must_schedule=row["must_schedule"] == "TRUE",
+            priority=int(row["priority"]),
+            shared_session_id=row["shared_session_id"] or None,
+        )
+        for row in rows
+    ]
+
+
+def booking_requests_from_rows(rows: List[Dict[str, str]]) -> List[ExistingBooking]:
+    """Convert validated existing_bookings.csv-style rows into booking objects."""
+    return [
+        ExistingBooking(
+            booking_id=row["booking_id"],
+            lesson_id=row["lesson_id"],
+            student_id=row["student_id"],
+            venue_id=row["venue_id"],
+            start_datetime=row["start_datetime"],
+            end_datetime=row["end_datetime"],
+            status=row["status"],
+            lock_level=int(row["lock_level"]),
+        )
+        for row in rows
+    ]
+
+
+def evaluate_schedule_request(request: Any, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Score a manually arranged schedule against a loaded solver request."""
     lessons_by_id = {lesson.lesson_id: lesson for lesson in request.lessons}
     venues_by_id = {venue.venue_id: venue for venue in request.venues}
     travel_lookup = build_travel_lookup(request.travel_times)
     weights = request.config.weights
-    diagnostics: List[str] = []
     warnings: List[str] = []
+    critical: List[str] = []
     placements: List[Dict[str, Any]] = []
     score = 0
 
@@ -1298,33 +1356,33 @@ def evaluate_schedule(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, 
     for index, raw in enumerate(rows, start=1):
         lesson_id = str(raw.get("lesson_id", "")).strip()
         if lesson_id in seen_lesson_ids:
-            diagnostics.append(f"Row {index}: duplicate placement for lesson_id={lesson_id}")
+            critical.append(f"Row {index}: duplicate placement for lesson_id={lesson_id}")
             continue
         seen_lesson_ids.add(lesson_id)
         lesson = schedule_item_lesson(lessons_by_id, raw)
         if lesson is None:
-            diagnostics.append(f"Row {index}: unknown lesson_id={lesson_id}")
+            critical.append(f"Row {index}: unknown lesson_id={lesson_id}")
             continue
         if lesson.venue_id not in venues_by_id:
-            diagnostics.append(f"Row {index}: unknown venue_id={lesson.venue_id}")
+            critical.append(f"Row {index}: unknown venue_id={lesson.venue_id}")
             continue
         try:
             start = parse_dt(str(raw.get("start_datetime", "")).strip())
             end = parse_dt(str(raw.get("end_datetime", "")).strip())
         except ValueError:
-            diagnostics.append(f"Row {index}: invalid start_datetime or end_datetime")
+            critical.append(f"Row {index}: invalid start_datetime or end_datetime")
             continue
         if end <= start:
-            diagnostics.append(f"Row {index}: end_datetime must be after start_datetime")
+            critical.append(f"Row {index}: end_datetime must be after start_datetime")
             continue
         if end - start != timedelta(minutes=lesson.duration_min):
-            diagnostics.append(
+            critical.append(
                 f"Row {index}: duration does not match lesson duration_min={lesson.duration_min}"
             )
 
         pref = get_preference_score(lesson.student_id, start, end, request.preferences)
         if pref is None:
-            diagnostics.append(f"{lesson.lesson_id}: outside student preference windows")
+            warnings.append(f"{lesson.lesson_id}: outside student preference windows")
             pref_score = 0
         else:
             pref_score = pref[1]
@@ -1332,13 +1390,13 @@ def evaluate_schedule(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, 
 
         coach_score = get_coach_availability_score(start, end, request.coach_availability)
         if coach_score is None:
-            diagnostics.append(f"{lesson.lesson_id}: outside coach availability")
+            warnings.append(f"{lesson.lesson_id}: outside coach availability")
             coach_score = 0
         else:
             score += coach_score
 
         if has_absence_conflict(lesson, start, end, request.absences):
-            diagnostics.append(f"{lesson.lesson_id}: conflicts with an absence")
+            critical.append(f"{lesson.lesson_id}: conflicts with an absence")
 
         score += lesson.priority * weights.lesson_priority
         placements.append(
@@ -1355,7 +1413,7 @@ def evaluate_schedule(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, 
         if lesson.lesson_id in seen_lesson_ids:
             continue
         if lesson.must_schedule:
-            diagnostics.append(f"{lesson.lesson_id}: required lesson is missing from manual schedule")
+            warnings.append(f"{lesson.lesson_id}: required lesson is missing from manual schedule")
         else:
             score -= weights.cancel_optional_penalty
 
@@ -1375,12 +1433,12 @@ def evaluate_schedule(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, 
                 and left_lesson.venue_id == right_lesson.venue_id
             )
             if same_shared and not same_slot:
-                diagnostics.append(
+                critical.append(
                     f"{left_lesson.shared_session_id}: shared lessons must use the same time and venue"
                 )
             if overlaps(left["start"], left["end"], right["start"], right["end"]):
                 if not (same_shared and same_slot):
-                    diagnostics.append(
+                    critical.append(
                         f"{left_lesson.lesson_id} and {right_lesson.lesson_id}: overlapping lessons"
                     )
                 continue
@@ -1391,7 +1449,7 @@ def evaluate_schedule(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, 
             second_lesson = second["lesson"]
             travel_min = get_travel_min(travel_lookup, first_lesson.venue_id, second_lesson.venue_id)
             if first["end"] + timedelta(minutes=travel_min) > second["start"]:
-                diagnostics.append(
+                critical.append(
                     f"{first_lesson.lesson_id} to {second_lesson.lesson_id}: needs {travel_min} minutes travel time"
                 )
             if first_lesson.venue_id != second_lesson.venue_id:
@@ -1402,8 +1460,7 @@ def evaluate_schedule(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, 
                 total_cross_penalty += pair_penalty
                 score -= pair_penalty
 
-    if diagnostics:
-        warnings.append(f"{len(diagnostics)} diagnostic issue(s) found")
+    diagnostics = critical + warnings
 
     return {
         "ok": True,
@@ -1414,8 +1471,36 @@ def evaluate_schedule(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, 
             "total_cross_venue_pair_penalty": total_cross_penalty,
         },
         "warnings": warnings,
+        "critical": critical,
         "diagnostics": diagnostics,
     }
+
+
+def evaluate_schedule(input_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Score a manually arranged schedule without solving or writing files."""
+    request = load_solver_request(input_dir)
+    return evaluate_schedule_request(request, rows)
+
+
+def validate_saved_schedule_guardrail(
+    input_dir: Path,
+    parsed_lessons: List[Dict[str, str]],
+    parsed_bookings: List[Dict[str, str]],
+) -> List[Dict[str, Any]]:
+    """Reject hard manual-schedule conflicts before writing lesson and booking CSVs."""
+    if not parsed_bookings:
+        return []
+    request = load_solver_request(input_dir)
+    pending_request = replace(
+        request,
+        lessons=lesson_requests_from_rows(parsed_lessons),
+        existing_bookings=booking_requests_from_rows(parsed_bookings),
+    )
+    evaluation = evaluate_schedule_request(pending_request, parsed_bookings)
+    return [
+        {"row": 0, "field": "schedule", "message": diagnostic}
+        for diagnostic in evaluation["critical"]
+    ]
 
 
 class ScheduleWebHandler(SimpleHTTPRequestHandler):

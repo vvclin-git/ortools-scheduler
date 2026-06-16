@@ -98,6 +98,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   service features.
 - Clarified that student and venue display names support Traditional Chinese
   when CSV files are saved as UTF-8.
+- Organizer runtime planning dates now default to the current local week,
+  `freeze_now` defaults to the current local date/time, and `Run Optimizer`
+  persists the visible Organizer runtime values back to `config.csv`.
+- Setup config editing now excludes `planning_start`, `planning_end`, and
+  `freeze_now` so the Organizer is the single planning-horizon and freeze-time
+  editor.
 
 ### Fixed
 
@@ -118,6 +124,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Updated the browser organizer to resize visible schedule placements to the
   current lesson durations after input saves or resets, avoiding stale
   `solution.json` block lengths after `duration_min` edits.
+- The manual schedule evaluator now reports blocking `critical` issues
+  separately from non-blocking `warnings`, and both `Save Lessons` and `Save
+  Solution` block hard manual-schedule conflicts such as venue-travel
+  infeasibility, overlapping bookings, invalid times, absence conflicts, and
+  shared-session mismatches before saving. The Organizer summary shows matching
+  critical and warning counts in one header row instead of one combined issue
+  count.
 - Fixed fixed/frozen bookings being forced into the model without first
   checking planning horizon, coach availability, absence conflicts, and
   conflicts with other fixed bookings.

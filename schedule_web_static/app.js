@@ -134,13 +134,15 @@ function setStatus(text, isWarning = false) {
 
 function renderSummary(solution, warnings, evaluation) {
   const summary = solution && solution.summary ? solution.summary : {};
-  const issueCount = evaluation ? (evaluation.diagnostics || []).length : (warnings || []).length;
+  const criticalCount = evaluation ? (evaluation.critical || []).length : 0;
+  const warningCount = evaluation ? (evaluation.warnings || []).length : (warnings || []).length;
   const items = [
     ["Status", solution ? solution.status : "No solution"],
     ["Scheduled", summary.scheduled_lessons ?? "-"],
     ["Unscheduled", summary.unscheduled_lessons ?? "-"],
     ["Score", evaluation ? evaluation.score : (summary.objective_value ?? "-")],
-    ["Issues", issueCount],
+    ["Critical", criticalCount],
+    ["Warnings", warningCount],
   ];
   document.getElementById("summaryBar").innerHTML = items.map(([label, value]) => `
     <div class="summary-item">
@@ -225,9 +227,9 @@ function renderDiagnostics() {
   if (evaluationResult) {
     lines.push("");
     lines.push(`Evaluator score: ${evaluationResult.score}`);
-    (evaluationResult.warnings || []).forEach((item) => lines.push(`Evaluator warning: ${item}`));
-    (evaluationResult.diagnostics || []).forEach((item) => lines.push(`Diagnostic: ${item}`));
-    if (!(evaluationResult.diagnostics || []).length) {
+    (evaluationResult.critical || []).forEach((item) => lines.push(`Critical: ${item}`));
+    (evaluationResult.warnings || []).forEach((item) => lines.push(`Warning: ${item}`));
+    if (!(evaluationResult.critical || []).length && !(evaluationResult.warnings || []).length) {
       lines.push("Diagnostic: no manual schedule issues found");
     }
   }
@@ -893,7 +895,10 @@ function diagnosticIssuesByLesson() {
     }
     byLesson.get(lessonId).push(message);
   };
-  (evaluationResult && evaluationResult.diagnostics ? evaluationResult.diagnostics : []).forEach((message) => {
+  const messages = evaluationResult
+    ? [...(evaluationResult.critical || []), ...(evaluationResult.warnings || [])]
+    : [];
+  messages.forEach((message) => {
     const text = String(message);
     const pairMatch = text.match(/^([^:]+?)\s+(?:to|and)\s+([^:]+?):/);
     if (pairMatch) {
@@ -1563,9 +1568,15 @@ function renderSavedSolutions() {
   });
 }
 
-function saveVisibleSolution() {
+async function saveVisibleSolution() {
   if (!currentSolution || !currentSolution.schedule || !currentSolution.schedule.length) {
     setStatus("No visible schedule to save", true);
+    return;
+  }
+  await evaluateCurrentSchedule({refreshCalendar: true});
+  const criticalIssues = evaluationResult ? (evaluationResult.critical || []) : [];
+  if (criticalIssues.length) {
+    setStatus(`Save solution blocked by ${criticalIssues.length} critical issue(s)`, true);
     return;
   }
   if (savedSolutions.length >= MAX_SAVED_SOLUTIONS) {
@@ -2062,7 +2073,9 @@ document.getElementById("cleanLessonsButton").addEventListener("click", () => {
   cleanLessons().catch((error) => setStatus(JSON.stringify(error), true));
 });
 document.getElementById("cleanScheduleButton").addEventListener("click", cleanSchedule);
-document.getElementById("saveSolutionButton").addEventListener("click", saveVisibleSolution);
+document.getElementById("saveSolutionButton").addEventListener("click", () => {
+  saveVisibleSolution().catch((error) => setStatus(formatErrorStatus(error, "Save solution failed"), true));
+});
 document.querySelectorAll("[data-calendar-overlay]").forEach((input) => {
   input.addEventListener("change", () => {
     if (input.checked) {
