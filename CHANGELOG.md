@@ -51,6 +51,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Organizer calendar rows, shared page typography, right-aligned compact header
+  summary, unscheduled tray text, compact import/export toolbar labels, and
+  surrounding controls now scale with the viewport so the full daily timeslot
+  range is visible without the previous oversized vertical grid.
+- `Clean Schedule` now keeps temporary saved solution snapshots available so
+  users can compare candidates after clearing the working calendar.
+- Added a preference hotzone calendar background that highlights unweighted
+  preferred-student demand for each 30-minute slot.
+- Calendar overlays now use independent toggles, and selected-student
+  preferences render as colored frames that can appear with trainer or hotzone
+  backgrounds, including while a lesson is being dragged.
+- Selected-student preference frames now merge vertically across contiguous
+  same-day slots.
+- Drag-time preference frames now update in place so the temporary overlay does
+  not interrupt native lesson drag/drop.
+- Scheduled Organizer lessons can now be dragged back to the unscheduled tray to
+  clear their visible booking time.
+- Students rows now support bulk `Make Couple` and `Clear Couple` actions from
+  selected rows.
+- Removed the Organizer `Reset` button; saved solution snapshots and `Clean
+  Schedule` remain available for switching or clearing the working calendar.
+- Organizer drag/drop diagnostics now clear stale preference warnings while a
+  placement is being re-evaluated and repaint blocks when fresh diagnostics
+  return.
 - Optimizer results now load into the Lessons page as unsaved draft booking
   times so users can review before persisting them.
 - Students `Generate Lessons` now regenerates lesson rows from the current
@@ -74,6 +98,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   service features.
 - Clarified that student and venue display names support Traditional Chinese
   when CSV files are saved as UTF-8.
+- Organizer runtime planning dates now default to the current local week,
+  `freeze_now` defaults to the current local date/time, and `Run Optimizer`
+  persists the visible Organizer runtime values back to `config.csv`.
+- Setup config editing now excludes `planning_start`, `planning_end`, and
+  `freeze_now` so the Organizer is the single planning-horizon and freeze-time
+  editor.
 
 ### Fixed
 
@@ -94,6 +124,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Updated the browser organizer to resize visible schedule placements to the
   current lesson durations after input saves or resets, avoiding stale
   `solution.json` block lengths after `duration_min` edits.
+- The manual schedule evaluator now reports blocking `critical` issues
+  separately from non-blocking `warnings`, and both `Save Lessons` and `Save
+  Solution` block hard manual-schedule conflicts such as venue-travel
+  infeasibility, overlapping bookings, invalid times, absence conflicts, and
+  shared-session mismatches before saving. The Organizer summary shows matching
+  critical and warning counts in one header row instead of one combined issue
+  count.
 - Fixed fixed/frozen bookings being forced into the model without first
   checking planning horizon, coach availability, absence conflicts, and
   conflicts with other fixed bookings.

@@ -4,19 +4,18 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Trainer Schedule Organizer</title>
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/styles.css?v=summary-layout">
   </head>
   <body>
     <header class="app-header">
-      <div>
+      <div class="header-title">
         <h1>Trainer Schedule Organizer</h1>
         <p id="statusText">Loading schedule data...</p>
       </div>
+      <section class="summary-bar" id="summaryBar"></section>
     </header>
 
     <main>
-      <section class="summary-bar" id="summaryBar"></section>
-
       <nav class="tabs" aria-label="Schedule views">
         <button class="tab active" type="button" data-view="organizer">Organizer</button>
         <button class="tab" type="button" data-view="students">Students</button>
@@ -48,15 +47,22 @@
           <button id="solveButton" type="button">Run Optimizer</button>
         </div>
         <div class="section-actions">
-          <h2>Weekly Organizer</h2>
           <div class="button-row">
-            <label class="inline-control">
-              background
-              <select id="calendarBackgroundMode">
-                <option value="trainer">Trainer availability</option>
-                <option value="preference">Selected preferences</option>
-              </select>
-            </label>
+            <fieldset class="inline-control overlay-control">
+              <legend>overlays</legend>
+              <label class="overlay-toggle">
+                <input id="calendarOverlayTrainer" type="checkbox" value="trainer" data-calendar-overlay checked>
+                Trainer
+              </label>
+              <label class="overlay-toggle">
+                <input id="calendarOverlayPreferences" type="checkbox" value="selected_preferences" data-calendar-overlay>
+                Preferences
+              </label>
+              <label class="overlay-toggle">
+                <input id="calendarOverlayHotzone" type="checkbox" value="preference_hotzone" data-calendar-overlay>
+                Hotzone
+              </label>
+            </fieldset>
             <label class="inline-control">
               selected status
               <select id="selectedStatus">
@@ -70,13 +76,15 @@
             <button id="toggleTrayButton" class="secondary" type="button">Hide Tray</button>
             <button id="organizerSaveLessonsButton" type="button">Save Lessons</button>
             <button id="cleanScheduleButton" class="secondary" type="button">Clean Schedule</button>
-            <button id="resetScheduleButton" class="secondary" type="button">Reset</button>
             <button id="saveSolutionButton" class="secondary" type="button">Save Solution</button>
             <span id="savedSolutions" class="saved-solutions" aria-label="Saved solutions"></span>
-            <button id="exportScheduleButton" class="secondary" type="button">Export Bookings CSV</button>
-            <button id="importScheduleButton" class="secondary" type="button">Import Bookings CSV</button>
+            <button id="exportScheduleButton" class="secondary" type="button">Export</button>
+            <button id="importScheduleButton" class="secondary" type="button">Import</button>
             <input id="scheduleCsvInput" class="visually-hidden" type="file" accept=".csv,text/csv">
           </div>
+        </div>
+        <div class="calendar-title-row">
+          <h2>Weekly Organizer</h2>
         </div>
         <div class="calendar-shell">
           <section class="unscheduled-tray" aria-label="Unscheduled lessons">
@@ -98,6 +106,8 @@
           <h2>Students</h2>
           <div class="button-row">
             <button id="addStudentButton" class="secondary" type="button">Add Student</button>
+            <button id="makeCoupleButton" class="secondary" type="button">Make Couple</button>
+            <button id="clearCoupleButton" class="secondary" type="button">Clear Couple</button>
             <button id="generateLessonsButton" class="secondary" type="button">Generate Lessons</button>
             <button id="importStudentCsvButton" class="secondary" type="button">Import CSV</button>
             <button id="cleanStudentsButton" class="secondary" type="button">Clean Students</button>
@@ -109,6 +119,7 @@
           <table class="input-table">
             <thead>
               <tr>
+                <th>select</th>
                 <th>student_id</th>
                 <th>student_name</th>
                 <th>lessons_per_week</th>
@@ -284,6 +295,7 @@
 
     <template id="studentRowTemplate">
       <tr>
+        <td><input class="student-select" type="checkbox" aria-label="Select student"></td>
         <td><input data-field="student_id" spellcheck="false"></td>
         <td><input data-field="student_name"></td>
         <td><input data-field="lessons_per_week" inputmode="numeric" spellcheck="false" placeholder="1"></td>
