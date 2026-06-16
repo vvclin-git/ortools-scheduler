@@ -57,6 +57,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   range is visible without the previous oversized vertical grid.
 - `Clean Schedule` now keeps temporary saved solution snapshots available so
   users can compare candidates after clearing the working calendar.
+- Added a preference hotzone calendar background that highlights unweighted
+  preferred-student demand for each 30-minute slot.
+- Calendar overlays now use independent toggles, and selected-student
+  preferences render as colored frames that can appear with trainer or hotzone
+  backgrounds, including while a lesson is being dragged.
+- Selected-student preference frames now merge vertically across contiguous
+  same-day slots.
+- Drag-time preference frames now update in place so the temporary overlay does
+  not interrupt native lesson drag/drop.
+- Scheduled Organizer lessons can now be dragged back to the unscheduled tray to
+  clear their visible booking time.
+- Students rows now support bulk `Make Couple` and `Clear Couple` actions from
+  selected rows.
+- Removed the Organizer `Reset` button; saved solution snapshots and `Clean
+  Schedule` remain available for switching or clearing the working calendar.
+- Organizer drag/drop diagnostics now clear stale preference warnings while a
+  placement is being re-evaluated and repaint blocks when fresh diagnostics
+  return.
 - Optimizer results now load into the Lessons page as unsaved draft booking
   times so users can review before persisting them.
 - Students `Generate Lessons` now regenerates lesson rows from the current

@@ -16,6 +16,7 @@ import contextlib
 import copy
 import io
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -1847,6 +1848,39 @@ class TrainerSolverMvpTests(unittest.TestCase):
             self.assertIn("overlapping lessons", diagnostics)
             self.assertIn("shared lessons must use the same time and venue", diagnostics)
 
+    def test_web_evaluate_schedule_clears_preference_warning_after_round_trip(self) -> None:
+        """A manual placement moved back into preference windows should be clean again."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir) / "input"
+            shutil.copytree("csv_demo_input", input_dir)
+
+            def placement(start: str, end: str) -> dict[str, str]:
+                return {
+                    "lesson_id": "4001-2",
+                    "student_id": "4001",
+                    "start_datetime": start,
+                    "end_datetime": end,
+                    "venue_id": "gym_a",
+                    "shared_session_id": "",
+                }
+
+            preferred = schedule_web_app.evaluate_schedule(
+                input_dir,
+                [placement("2026-06-15T19:00", "2026-06-15T20:00")],
+            )
+            non_preferred = schedule_web_app.evaluate_schedule(
+                input_dir,
+                [placement("2026-06-15T10:00", "2026-06-15T11:00")],
+            )
+            restored = schedule_web_app.evaluate_schedule(
+                input_dir,
+                [placement("2026-06-15T19:00", "2026-06-15T20:00")],
+            )
+
+            self.assertNotIn("outside student preference windows", " ".join(preferred["diagnostics"]))
+            self.assertIn("4001-2: outside student preference windows", " ".join(non_preferred["diagnostics"]))
+            self.assertNotIn("outside student preference windows", " ".join(restored["diagnostics"]))
+
     @unittest.skipIf(solver.cp_model is None, "OR-Tools is not installed.")
     def test_web_run_solver_returns_solution_shape(self) -> None:
         """The web backend solve helper should write and return solver output."""
@@ -1914,6 +1948,9 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn('data-view="students"', html)
         self.assertIn('data-view="lessons"', html)
         self.assertIn("saveStudentsButton", html)
+        self.assertIn("makeCoupleButton", html)
+        self.assertIn("clearCoupleButton", html)
+        self.assertIn("student-select", html)
         self.assertIn("generateLessonsButton", html)
         self.assertIn("importStudentCsvButton", html)
         self.assertIn("cleanStudentsButton", html)
@@ -1929,7 +1966,12 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("runtimeFreezeNow", html)
         self.assertIn('type="datetime-local"', html)
         self.assertNotIn("saveRuntimeConfigButton", html)
-        self.assertIn("calendarBackgroundMode", html)
+        self.assertNotIn("calendarBackgroundMode", html)
+        self.assertIn("calendarOverlayTrainer", html)
+        self.assertIn("calendarOverlayPreferences", html)
+        self.assertIn("calendarOverlayHotzone", html)
+        self.assertIn("data-calendar-overlay", html)
+        self.assertIn("Hotzone", html)
         self.assertIn("selectedStatus", html)
         self.assertIn("cleanScheduleButton", html)
         self.assertIn("toggleTrayButton", html)
@@ -1947,7 +1989,7 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("savePreferenceScoresButton", html)
         self.assertIn("preferenceScoreTableBody", html)
         self.assertIn("Mon-Fri 0900-1200 preferred; Fri acceptable; Sat", html)
-        self.assertIn("resetScheduleButton", html)
+        self.assertNotIn("resetScheduleButton", html)
         self.assertIn("lessonTableBody", html)
         self.assertIn("shared_session_id", html)
         self.assertIn("lessons_per_week", html)
@@ -1980,15 +2022,45 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("Solve time", script)
         self.assertIn("generateLessonsFromStudents", script)
         self.assertIn("generatedLessonRowsFromStudents", script)
+        self.assertIn("makeSelectedStudentsCouple", script)
+        self.assertIn("clearSelectedStudentsCouple", script)
+        self.assertIn("coupleKeyForStudentIds", script)
+        self.assertIn('`couple_${normalized.join("_")}`', script)
         self.assertIn("old bookings were cleared", script)
         self.assertIn('must_schedule: "FALSE"', script)
         self.assertIn("setAllMustSchedule", script)
         self.assertIn("renderUnscheduledTray", script)
         self.assertIn("toggleTrayVisibility", script)
+        self.assertIn("bindTrayDropHandlers", script)
+        self.assertIn("unscheduleGroupToTray", script)
+        self.assertIn("clearLessonRowsFromSchedule", script)
+        self.assertIn("Completed, locked, and in-progress lessons cannot be returned to the tray", script)
+        self.assertIn("booking_day = \"\"", script)
+        self.assertIn("booking_start = \"\"", script)
+        self.assertIn("booking_status = \"\"", script)
         self.assertIn("tray-table", script)
         self.assertIn("selectedTrayKey", script)
         self.assertIn("--row-span:${rowSpan}", script)
-        self.assertIn("preferenceClassForCell", script)
+        self.assertIn("activeCalendarOverlays", script)
+        self.assertIn("preferenceFrameLevelForCell", script)
+        self.assertIn("preferenceFrameClassForCell", script)
+        self.assertIn("preferenceFrameClassesForCell", script)
+        self.assertIn("updateCalendarPreferenceFrames", script)
+        self.assertIn("preference-frame-join-prev", script)
+        self.assertIn("preference-frame-join-next", script)
+        self.assertIn("draggedPreferenceGroupKey", script)
+        self.assertIn("dragend", script)
+        self.assertRegex(
+            script,
+            r'block\.addEventListener\("dragstart",[\s\S]*?draggedPreferenceGroupKey = draggedGroupKey;[\s\S]*?updateCalendarPreferenceFrames\(\);[\s\S]*?\}\);',
+        )
+        dragstart_blocks = re.findall(r'block\.addEventListener\("dragstart",[\s\S]*?\n    \}\);', script)
+        self.assertTrue(dragstart_blocks)
+        self.assertTrue(all("renderCalendar(appData)" not in block for block in dragstart_blocks))
+        self.assertIn("preferredStudentCountsByCell", script)
+        self.assertIn("hotzoneClassForCount", script)
+        self.assertIn("data-hotzone-count", script)
+        self.assertIn("students prefer this slot", script)
         self.assertIn("diagnosticIssuesByLesson", script)
         self.assertIn("lesson-issue", script)
         self.assertIn("updateSelectedStatus", script)
@@ -2009,6 +2081,11 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("updateLessonRowsFromSchedule", script)
         self.assertIn("lesson-status", script)
         self.assertIn("status-confirmed", Path("schedule_web_static/styles.css").read_text(encoding="utf-8"))
+        self.assertIn("hotzone-5", Path("schedule_web_static/styles.css").read_text(encoding="utf-8"))
+        self.assertIn("preference-frame-preferred", Path("schedule_web_static/styles.css").read_text(encoding="utf-8"))
+        self.assertIn("preference-frame-join-prev", Path("schedule_web_static/styles.css").read_text(encoding="utf-8"))
+        self.assertIn("border-top-width: 0", Path("schedule_web_static/styles.css").read_text(encoding="utf-8"))
+        self.assertNotIn(".preference-preferred", Path("schedule_web_static/styles.css").read_text(encoding="utf-8"))
         self.assertIn("syncScheduleToCurrentInput", script)
         self.assertIn("updated ${result.updatedCount} visible placement(s)", script)
         self.assertIn("resized ${result.resizedCount} visible placement(s)", script)

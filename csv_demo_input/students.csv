@@ -1,6 +1,6 @@
 student_id,name,default_venue_id,priority,lessons_per_week,couple
-4001,Amy Lin,gym_a,1,2,4001
-4002,Brian Lin,gym_a,1,1,4001
+4001,Amy Lin,gym_a,1,2,couple_4001_4002_4010
+4002,Brian Lin,gym_a,1,1,couple_4001_4002_4010
 4003,Grace Chen,gym_a,1,2,4003
 4004,Henry Chen,gym_a,1,1,4003
 4005,Mia Wang,gym_a,1,2,4005
@@ -8,7 +8,7 @@ student_id,name,default_venue_id,priority,lessons_per_week,couple
 4007,Ivy Huang,gym_a,1,2,4007
 4008,Jack Huang,gym_a,1,1,4007
 4009,Lily Liu,gym_a,1,2,4009
-4010,Mark Liu,gym_a,1,1,4009
+4010,Mark Liu,gym_a,1,1,couple_4001_4002_4010
 4011,Nina Chou,gym_a,1,2,4011
 4012,Oscar Chou,gym_a,1,1,4011
 4013,Paula Tsai,gym_b,1,2,4013

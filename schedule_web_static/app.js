@@ -5,10 +5,19 @@ const END_HOUR = 23;
 let appData = null;
 let currentSolution = null;
 let evaluationResult = null;
+let evaluationVersion = 0;
 let draggedGroupKey = null;
+let draggedPreferenceGroupKey = null;
 let selectedGroupKey = null;
 let selectedTrayKey = null;
-let calendarBackgroundMode = "trainer";
+const activeCalendarOverlays = new Set(["trainer"]);
+const PREFERENCE_FRAME_CLASSES = [
+  "preference-frame-preferred",
+  "preference-frame-acceptable",
+  "preference-frame-last_resort",
+  "preference-frame-join-prev",
+  "preference-frame-join-next",
+];
 let trayVisible = true;
 const dirtySections = new Set();
 const savedSolutions = [];
@@ -102,7 +111,7 @@ async function loadData() {
 
 function renderAll() {
   renderRuntimeConfig();
-  document.getElementById("calendarBackgroundMode").value = calendarBackgroundMode;
+  syncOverlayControls();
   renderTrayVisibility();
   renderTable(appData.table_rows);
   renderLessonTable(appData.lesson_rows || []);
@@ -554,9 +563,20 @@ function handleRowEdit(bodyId, input) {
     }
     syncLessonRowsFromDom();
     applyLessonRowsToSchedule();
+    invalidateScheduleEvaluation();
     renderCalendar(appData);
-    evaluateCurrentSchedule().catch((error) => setStatus(JSON.stringify(error), true));
+    evaluateCurrentSchedule({refreshCalendar: true}).catch((error) => setStatus(JSON.stringify(error), true));
   }
+}
+
+function invalidateScheduleEvaluation() {
+  evaluationVersion += 1;
+  evaluationResult = null;
+  if (appData) {
+    renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
+    renderDiagnostics();
+  }
+  return evaluationVersion;
 }
 
 function collectTableRows(bodyId) {
@@ -571,6 +591,56 @@ function collectTableRows(bodyId) {
 
 function collectRows() {
   return collectTableRows("studentTableBody");
+}
+
+function selectedStudentRows() {
+  return [...document.querySelectorAll("#studentTableBody tr")]
+    .filter((row) => row.querySelector(".student-select")?.checked);
+}
+
+function selectedStudentIds() {
+  return selectedStudentRows()
+    .map((row) => row.querySelector('[data-field="student_id"]')?.value.trim() || "")
+    .filter(Boolean);
+}
+
+function coupleKeyForStudentIds(studentIds) {
+  const normalized = [...studentIds]
+    .map((studentId) => studentId.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""))
+    .filter(Boolean)
+    .sort();
+  return normalized.length ? `couple_${normalized.join("_")}` : "";
+}
+
+function setSelectedCoupleValue(value) {
+  selectedStudentRows().forEach((row) => {
+    const input = row.querySelector('[data-field="couple"]');
+    if (input) {
+      input.value = value;
+    }
+  });
+  markDirty("students");
+}
+
+function makeSelectedStudentsCouple() {
+  const studentIds = selectedStudentIds();
+  if (studentIds.length < 2) {
+    setStatus("Select at least two students with IDs to make a couple", true);
+    return;
+  }
+  const coupleKey = coupleKeyForStudentIds(studentIds);
+  setSelectedCoupleValue(coupleKey);
+  setStatus(`Set ${studentIds.length} selected student(s) to ${coupleKey}`, true);
+}
+
+function clearSelectedStudentsCouple() {
+  const selectedRows = selectedStudentRows();
+  if (!selectedRows.length) {
+    setStatus("Select at least one student to clear couple", true);
+    return;
+  }
+  setSelectedCoupleValue("");
+  setStatus(`Cleared couple for ${selectedRows.length} selected student(s)`, true);
 }
 
 function collectLessonRows() {
@@ -609,11 +679,32 @@ function availabilityMap(windows) {
   return map;
 }
 
-function preferenceClassForCell(day, mark) {
-  if (calendarBackgroundMode !== "preference") {
+function overlayEnabled(name) {
+  return activeCalendarOverlays.has(name);
+}
+
+function syncOverlayControls() {
+  const byValue = {
+    trainer: document.getElementById("calendarOverlayTrainer"),
+    selected_preferences: document.getElementById("calendarOverlayPreferences"),
+    preference_hotzone: document.getElementById("calendarOverlayHotzone"),
+  };
+  Object.entries(byValue).forEach(([value, input]) => {
+    if (input) {
+      input.checked = activeCalendarOverlays.has(value);
+    }
+  });
+}
+
+function shouldShowPreferenceFrames() {
+  return overlayEnabled("selected_preferences") || Boolean(draggedPreferenceGroupKey);
+}
+
+function preferenceFrameLevelForCell(day, mark) {
+  if (!shouldShowPreferenceFrames()) {
     return "";
   }
-  const studentIds = selectedPreferenceStudentIds();
+  const studentIds = activePreferenceStudentIds();
   if (!studentIds.size) {
     return "";
   }
@@ -634,7 +725,64 @@ function preferenceClassForCell(day, mark) {
       }
     }
   });
-  return bestLevel ? `preference-${bestLevel}` : "";
+  return bestLevel;
+}
+
+function preferenceFrameClassForCell(day, mark) {
+  const level = preferenceFrameLevelForCell(day, mark);
+  return level ? `preference-frame-${level}` : "";
+}
+
+function preferenceFrameClassesForCell(day, mark) {
+  const level = preferenceFrameLevelForCell(day, mark);
+  if (!level) {
+    return [];
+  }
+  const classes = [`preference-frame-${level}`];
+  if (preferenceFrameLevelForCell(day, mark - 30) === level) {
+    classes.push("preference-frame-join-prev");
+  }
+  if (preferenceFrameLevelForCell(day, mark + 30) === level) {
+    classes.push("preference-frame-join-next");
+  }
+  return classes;
+}
+
+function updateCalendarPreferenceFrames() {
+  document.querySelectorAll(".calendar-cell[data-day]").forEach((cell) => {
+    cell.classList.remove(...PREFERENCE_FRAME_CLASSES);
+    const frameClasses = preferenceFrameClassesForCell(cell.dataset.day, Number(cell.dataset.minute));
+    if (frameClasses.length) {
+      cell.classList.add(...frameClasses);
+    }
+  });
+}
+
+function preferredStudentCountsByCell(preferences) {
+  const counts = new Map();
+  (preferences || []).forEach((pref) => {
+    if (pref.level !== "preferred") {
+      return;
+    }
+    const start = minutes(pref.start);
+    const end = minutes(pref.end);
+    for (let mark = start; mark < end; mark += 30) {
+      const key = `${pref.day}-${mark}`;
+      if (!counts.has(key)) {
+        counts.set(key, new Set());
+      }
+      counts.get(key).add(pref.student_id);
+    }
+  });
+  return new Map([...counts.entries()].map(([key, studentIds]) => [key, studentIds.size]));
+}
+
+function hotzoneClassForCount(count, maxCount) {
+  if (!count || !maxCount) {
+    return "";
+  }
+  const band = Math.max(1, Math.min(5, Math.ceil((count / maxCount) * 5)));
+  return `hotzone-${band}`;
 }
 
 function selectedGroup() {
@@ -646,7 +794,27 @@ function selectedTrayGroup() {
   return selectedTrayKey ? trayGroupByKey(selectedTrayKey) : null;
 }
 
-function selectedPreferenceStudentIds() {
+function draggedPreferenceGroup() {
+  if (!draggedPreferenceGroupKey) {
+    return null;
+  }
+  const trayGroup = trayGroupByKey(draggedPreferenceGroupKey);
+  if (trayGroup) {
+    return {type: "tray", group: trayGroup};
+  }
+  const group = lessonGroups(currentSolution, appData ? appData.lessons || [] : [])
+    .find((item) => item.key === draggedPreferenceGroupKey);
+  return group ? {type: "scheduled", group} : null;
+}
+
+function activePreferenceStudentIds() {
+  const dragged = draggedPreferenceGroup();
+  if (dragged && dragged.type === "scheduled") {
+    return new Set(dragged.group.items.map((item) => item.student_id));
+  }
+  if (dragged && dragged.type === "tray") {
+    return new Set(dragged.group.lessons.map((lesson) => lesson.student_id));
+  }
   const group = selectedGroup();
   if (group) {
     return new Set(group.items.map((item) => item.student_id));
@@ -918,16 +1086,19 @@ function renderUnscheduledTray() {
   document.querySelectorAll(".tray-lesson").forEach((block) => {
     block.addEventListener("dragstart", (event) => {
       draggedGroupKey = block.dataset.trayKey;
+      draggedPreferenceGroupKey = draggedGroupKey;
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", draggedGroupKey);
+      updateCalendarPreferenceFrames();
+    });
+    block.addEventListener("dragend", () => {
+      draggedPreferenceGroupKey = null;
+      draggedGroupKey = null;
+      updateCalendarPreferenceFrames();
     });
     block.addEventListener("click", () => {
       selectedTrayKey = block.dataset.trayKey;
       selectedGroupKey = null;
-      if (calendarBackgroundMode !== "preference") {
-        calendarBackgroundMode = "preference";
-        document.getElementById("calendarBackgroundMode").value = calendarBackgroundMode;
-      }
       renderCalendar(appData);
     });
   });
@@ -951,6 +1122,10 @@ function toggleTrayVisibility() {
 function renderCalendar(data) {
   const grid = document.getElementById("calendarGrid");
   const available = availabilityMap(data.coach_availability || []);
+  const hotzoneCounts = overlayEnabled("preference_hotzone")
+    ? preferredStudentCountsByCell(data.preferences || [])
+    : new Map();
+  const maxHotzoneCount = hotzoneCounts.size ? Math.max(...hotzoneCounts.values()) : 0;
   const groupsByCell = new Map();
   const issuesByLesson = diagnosticIssuesByLesson();
   const blocks = [];
@@ -976,14 +1151,20 @@ function renderCalendar(data) {
     DAYS.forEach((day) => {
       const key = `${day}-${mark}`;
       const classes = ["calendar-cell"];
-      const preferenceClass = preferenceClassForCell(day, mark);
-      if (calendarBackgroundMode === "trainer" && available.has(key)) {
+      const hotzoneCount = hotzoneCounts.get(key) || 0;
+      const hotzoneClass = hotzoneClassForCount(hotzoneCount, maxHotzoneCount);
+      const preferenceFrameClasses = preferenceFrameClassesForCell(day, mark);
+      if (hotzoneClass) {
+        classes.push(hotzoneClass);
+      } else if (overlayEnabled("trainer") && available.has(key)) {
         classes.push("available");
-      } else if (preferenceClass) {
-        classes.push(preferenceClass);
+      }
+      if (preferenceFrameClasses.length) {
+        classes.push(...preferenceFrameClasses);
       }
       const groups = groupsByCell.get(key) || [];
-      html += `<div class="${classes.join(" ")}" data-day="${esc(day)}" data-minute="${mark}">`;
+      const hotzoneTitle = hotzoneCount ? ` title="${esc(`${hotzoneCount} students prefer this slot`)}"` : "";
+      html += `<div class="${classes.join(" ")}" data-day="${esc(day)}" data-minute="${mark}" data-hotzone-count="${hotzoneCount}"${hotzoneTitle}>`;
       groups.forEach((group) => {
         const first = group.items[0];
         const names = group.items.map((item) => item.student_name).join(" / ");
@@ -1011,6 +1192,7 @@ function renderCalendar(data) {
   grid.innerHTML = html + blocks.join("");
   bindCalendarDragHandlers();
   renderUnscheduledTray();
+  bindTrayDropHandlers();
   updateSelectedStatusControl();
 }
 
@@ -1023,8 +1205,15 @@ function bindCalendarDragHandlers() {
     });
     block.addEventListener("dragstart", (event) => {
       draggedGroupKey = block.dataset.groupKey;
+      draggedPreferenceGroupKey = draggedGroupKey;
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", draggedGroupKey);
+      updateCalendarPreferenceFrames();
+    });
+    block.addEventListener("dragend", () => {
+      draggedPreferenceGroupKey = null;
+      draggedGroupKey = null;
+      updateCalendarPreferenceFrames();
     });
   });
   document.querySelectorAll(".calendar-cell[data-day]").forEach((cell) => {
@@ -1037,8 +1226,45 @@ function bindCalendarDragHandlers() {
       event.preventDefault();
       cell.classList.remove("drop-target");
       const key = event.dataTransfer.getData("text/plain") || draggedGroupKey;
-      await moveGroupTo(key, cell.dataset.day, Number(cell.dataset.minute));
+      try {
+        await moveGroupTo(key, cell.dataset.day, Number(cell.dataset.minute));
+      } finally {
+        draggedPreferenceGroupKey = null;
+        draggedGroupKey = null;
+        renderCalendar(appData);
+      }
     });
+  });
+}
+
+function bindTrayDropHandlers() {
+  const tray = document.querySelector(".unscheduled-tray");
+  if (!tray) {
+    return;
+  }
+  if (tray.dataset.dropBound === "true") {
+    return;
+  }
+  tray.dataset.dropBound = "true";
+  tray.addEventListener("dragover", (event) => {
+    if (!draggedGroupKey || trayGroupByKey(draggedGroupKey)) {
+      return;
+    }
+    event.preventDefault();
+    tray.classList.add("drop-target");
+  });
+  tray.addEventListener("dragleave", () => tray.classList.remove("drop-target"));
+  tray.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    tray.classList.remove("drop-target");
+    const key = event.dataTransfer.getData("text/plain") || draggedGroupKey;
+    try {
+      await unscheduleGroupToTray(key);
+    } finally {
+      draggedPreferenceGroupKey = null;
+      draggedGroupKey = null;
+      renderCalendar(appData);
+    }
   });
 }
 
@@ -1067,6 +1293,57 @@ function scheduleItemsFromTrayGroup(group, day, startMinute) {
       booking_status: "draft",
     };
   });
+}
+
+function clearLessonRowsFromSchedule(lessonIds) {
+  (appData.lesson_rows || []).forEach((row) => {
+    if (!lessonIds.has(row.lesson_id)) {
+      return;
+    }
+    row.booking_day = "";
+    row.booking_start = "";
+    row.booking_end = "";
+    row.booking_status = "";
+    row.booking_dirty = "";
+    row.booking_readonly = "FALSE";
+  });
+}
+
+async function unscheduleGroupToTray(groupKey) {
+  if (!groupKey || trayGroupByKey(groupKey) || !currentSolution || !currentSolution.schedule) {
+    return;
+  }
+  const group = lessonGroups(currentSolution, appData.lessons || []).find((item) => item.key === groupKey);
+  if (!group) {
+    return;
+  }
+  const fixedStatuses = new Set(["completed", "locked", "in_progress"]);
+  const rowsById = lessonRowById();
+  const hasFixed = group.items.some((item) => {
+    const row = rowsById.get(item.lesson_id) || {};
+    const status = item.booking_status || row.booking_status || "";
+    return fixedStatuses.has(status);
+  });
+  if (hasFixed) {
+    setStatus("Completed, locked, and in-progress lessons cannot be returned to the tray", true);
+    return;
+  }
+  const lessonIds = new Set(group.items.map((item) => item.lesson_id));
+  currentSolution.status = "MANUAL";
+  currentSolution.schedule = (currentSolution.schedule || []).filter((item) => !lessonIds.has(item.lesson_id));
+  currentSolution.summary = {
+    ...(currentSolution.summary || {}),
+    scheduled_lessons: currentSolution.schedule.length,
+    unscheduled_lessons: Math.max(0, (appData.lessons || []).length - currentSolution.schedule.length),
+  };
+  clearLessonRowsFromSchedule(lessonIds);
+  selectedGroupKey = null;
+  selectedTrayKey = null;
+  invalidateScheduleEvaluation();
+  renderLessonTable(appData.lesson_rows || []);
+  markDirty("lessons");
+  renderCalendar(appData);
+  await evaluateCurrentSchedule({refreshCalendar: true});
 }
 
 async function moveGroupTo(groupKey, day, startMinute) {
@@ -1116,10 +1393,11 @@ async function moveGroupTo(groupKey, day, startMinute) {
     unscheduled_lessons: Math.max(0, (appData.lessons || []).length - currentSolution.schedule.length),
   };
   updateLessonRowsFromSchedule(movedItems, "draft", true);
+  invalidateScheduleEvaluation();
   renderLessonTable(appData.lesson_rows || []);
   markDirty("lessons");
   renderCalendar(appData);
-  await evaluateCurrentSchedule();
+  await evaluateCurrentSchedule({refreshCalendar: true});
 }
 
 function schedulePlacements() {
@@ -1145,35 +1423,32 @@ function schedulePlacements() {
   });
 }
 
-async function evaluateCurrentSchedule() {
+async function evaluateCurrentSchedule(options = {}) {
+  const {refreshCalendar = false} = options;
+  const requestVersion = evaluationVersion;
   if (!currentSolution) {
     evaluationResult = null;
     renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
     renderDiagnostics();
+    if (refreshCalendar) {
+      renderCalendar(appData);
+    }
     return;
   }
-  evaluationResult = await fetchJson("/api/evaluate-schedule", {
+  const result = await fetchJson("/api/evaluate-schedule", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({schedule: schedulePlacements()}),
   });
+  if (requestVersion !== evaluationVersion) {
+    return;
+  }
+  evaluationResult = result;
   renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
   renderDiagnostics();
-}
-
-function resetSchedule() {
-  currentSolution = appData.solution ? structuredClone(appData.solution) : null;
-  selectedGroupKey = null;
-  selectedTrayKey = null;
-  syncScheduleToCurrentInput();
-  if (currentSolution && currentSolution.schedule) {
-    updateLessonRowsFromSchedule(currentSolution.schedule, "draft", true);
-    renderLessonTable(appData.lesson_rows || []);
-    markDirty("lessons");
+  if (refreshCalendar) {
+    renderCalendar(appData);
   }
-  renderCalendar(appData);
-  evaluateCurrentSchedule().catch((error) => setStatus(JSON.stringify(error), true));
-  setStatus("Schedule reset to optimized solution");
 }
 
 async function saveLessonRowsNow(statusText) {
@@ -1203,9 +1478,9 @@ async function cleanSchedule() {
     row.booking_readonly = "FALSE";
   });
   currentSolution = null;
-  evaluationResult = null;
   selectedGroupKey = null;
   selectedTrayKey = null;
+  invalidateScheduleEvaluation();
   renderLessonTable(appData.lesson_rows || []);
   renderSavedSolutions();
   renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
@@ -1233,6 +1508,7 @@ async function updateSelectedStatus() {
       : item
   ));
   updateLessonRowsFromSchedule(currentSolution.schedule.filter((item) => lessonIds.has(item.lesson_id)), status, true);
+  invalidateScheduleEvaluation();
   renderLessonTable(appData.lesson_rows || []);
   renderCalendar(appData);
   try {
@@ -1321,13 +1597,13 @@ async function restoreSavedSolution(index) {
   renderLessonTable(appData.lesson_rows);
   syncLessonRowsFromDom();
   syncScheduleToCurrentInput();
-  evaluationResult = saved.evaluation ? structuredClone(saved.evaluation) : null;
+  invalidateScheduleEvaluation();
   markDirty("lessons");
   renderSavedSolutions();
   renderSummary(currentSolution, appData.validation_warnings, evaluationResult);
   renderCalendar(appData);
   renderDiagnostics();
-  await evaluateCurrentSchedule();
+  await evaluateCurrentSchedule({refreshCalendar: true});
   setStatus(`Switched to solution ${saved.hash}`);
 }
 
@@ -1470,10 +1746,11 @@ async function importScheduleCsvFile(file) {
     ...(currentSolution.summary || {}),
     scheduled_lessons: currentSolution.schedule.length,
   };
+  invalidateScheduleEvaluation();
   renderLessonTable(appData.lesson_rows || []);
   markDirty("lessons");
   renderCalendar(appData);
-  await evaluateCurrentSchedule();
+  await evaluateCurrentSchedule({refreshCalendar: true});
   setStatus(`Imported ${currentSolution.schedule.length} booking row(s); click Save Lessons to persist`);
 }
 
@@ -1484,9 +1761,9 @@ function formatErrorStatus(error, fallback) {
 
 function clearScheduleState() {
   currentSolution = null;
-  evaluationResult = null;
   selectedGroupKey = null;
   selectedTrayKey = null;
+  invalidateScheduleEvaluation();
 }
 
 async function cleanStudents() {
@@ -1776,6 +2053,8 @@ document.getElementById("savePreferenceScoresButton").addEventListener("click", 
 document.getElementById("saveConfigButton").addEventListener("click", saveConfigParameters);
 document.getElementById("resetConfigButton").addEventListener("click", resetConfigDefaults);
 document.getElementById("generateLessonsButton").addEventListener("click", generateLessonsFromStudents);
+document.getElementById("makeCoupleButton").addEventListener("click", makeSelectedStudentsCouple);
+document.getElementById("clearCoupleButton").addEventListener("click", clearSelectedStudentsCouple);
 document.getElementById("cleanStudentsButton").addEventListener("click", () => {
   cleanStudents().catch((error) => setStatus(JSON.stringify(error), true));
 });
@@ -1783,11 +2062,24 @@ document.getElementById("cleanLessonsButton").addEventListener("click", () => {
   cleanLessons().catch((error) => setStatus(JSON.stringify(error), true));
 });
 document.getElementById("cleanScheduleButton").addEventListener("click", cleanSchedule);
-document.getElementById("resetScheduleButton").addEventListener("click", resetSchedule);
 document.getElementById("saveSolutionButton").addEventListener("click", saveVisibleSolution);
-document.getElementById("calendarBackgroundMode").addEventListener("change", (event) => {
-  calendarBackgroundMode = event.target.value;
-  renderCalendar(appData);
+document.querySelectorAll("[data-calendar-overlay]").forEach((input) => {
+  input.addEventListener("change", () => {
+    if (input.checked) {
+      activeCalendarOverlays.add(input.value);
+    } else {
+      activeCalendarOverlays.delete(input.value);
+    }
+    renderCalendar(appData);
+  });
+});
+document.addEventListener("dragend", () => {
+  if (!draggedPreferenceGroupKey && !draggedGroupKey) {
+    return;
+  }
+  draggedPreferenceGroupKey = null;
+  draggedGroupKey = null;
+  updateCalendarPreferenceFrames();
 });
 document.getElementById("toggleTrayButton").addEventListener("click", toggleTrayVisibility);
 document.getElementById("selectedStatus").addEventListener("change", () => {

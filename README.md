@@ -165,21 +165,27 @@ trainer timeslots as `preferred`.
 
 The Organizer page supports manual schedule review and repair:
 
-- Drag scheduled sessions to another day/time and drag unscheduled lessons from
-  the left-side resizable tray into the calendar.
+- Drag scheduled sessions to another day/time, drag unscheduled lessons from
+  the left-side resizable tray into the calendar, and drag scheduled lessons
+  back to the tray to clear their visible booking time.
 - Review the full daily timeslot range in a compact Organizer layout that
   scales the calendar row height, shared typography, and surrounding controls
   to the browser viewport.
 - Click a scheduled block to change its status; status changes are saved
   immediately for that session/group.
-- Switch the calendar background between trainer availability and the selected
-  student's preference windows. Preference mode uses different colors for
-  `preferred`, `acceptable`, and `last_resort`.
+- Toggle calendar overlays for trainer availability, selected-student
+  preference frames, and preference hotzones. Preference frames use different
+  colors for `preferred`, `acceptable`, and `last_resort`, and also appear
+  temporarily while a lesson is being dragged without rebuilding the drag
+  source.
+- Use the preference hotzone background to see unweighted demand across all
+  students, counting how many students prefer each visible 30-minute slot.
 - Review score and conflict diagnostics in the diagnostics panel and directly
-  on affected calendar blocks.
-- Reset to the optimized solution, save temporary in-browser solution snapshots,
-  clear only the current working calendar, or export/import the visible schedule
-  with the solver-readable booking CSV format:
+  on affected calendar blocks; diagnostics refresh after each visible
+  drag/drop placement so old preference warnings are not reused.
+- Save temporary in-browser solution snapshots, clear only the current working
+  calendar, or export/import the visible schedule with the solver-readable
+  booking CSV format:
 
 ```csv
 booking_id,lesson_id,student_id,venue_id,start_datetime,end_datetime,status,lock_level
@@ -237,14 +243,15 @@ References in preferences, lessons, bookings, student absences, and
 
 The Students page can create lesson rows from each student's `lessons_per_week`
 plan. `Add Student` creates a numeric student row and one matching unscheduled
-lesson row immediately. `Generate Lessons` regenerates lesson rows from the
-current `lessons_per_week` and `couple` values, saves both Students and
-Lessons, and clears old booking times so stale lesson/session groupings do not
-survive student changes. When two or more students share the same non-blank
-`couple` value, generated lesson rows use indexed shared IDs such as `pair_a-1`
-only up to the smallest lesson count inside the group. New and generated lesson
-rows default to optional; use the Lessons page bulk buttons to mark all visible
-lessons required or optional.
+lesson row immediately. Use row checkboxes with `Make Couple` or `Clear Couple`
+to bulk edit the existing `couple` column before saving or regenerating lessons.
+`Generate Lessons` regenerates lesson rows from the current `lessons_per_week`
+and `couple` values, saves both Students and Lessons, and clears old booking
+times so stale lesson/session groupings do not survive student changes. When two
+or more students share the same non-blank `couple` value, generated lesson rows
+use indexed shared IDs such as `pair_a-1` only up to the smallest lesson count
+inside the group. New and generated lesson rows default to optional; use the
+Lessons page bulk buttons to mark all visible lessons required or optional.
 
 When lesson input changes affect duration, `Save Lessons` updates the visible
 organizer placements to match the current `duration_min` values before

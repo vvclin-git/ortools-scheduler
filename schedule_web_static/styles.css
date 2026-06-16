@@ -160,6 +160,31 @@ button:hover {
   font-weight: 700;
 }
 
+.overlay-control {
+  align-self: end;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.overlay-control legend {
+  padding: 0;
+}
+
+.overlay-toggle {
+  align-items: center;
+  color: var(--ink);
+  display: inline-flex;
+  font-size: var(--font-base);
+  font-weight: 700;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.overlay-toggle input {
+  width: auto;
+}
+
 main {
   padding: 10px 28px 28px;
 }
@@ -302,6 +327,12 @@ h2 {
   resize: horizontal;
 }
 
+.unscheduled-tray.drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -4px;
+  background: #eef8f3;
+}
+
 .tray-heading {
   display: flex;
   align-items: center;
@@ -383,16 +414,57 @@ h3 {
   background: var(--availability);
 }
 
-.preference-preferred {
-  background: #dff3c8;
+.hotzone-1 {
+  background: #edf8e9;
 }
 
-.preference-acceptable {
-  background: #d8eefc;
+.hotzone-2 {
+  background: #d8efcf;
 }
 
-.preference-last_resort {
-  background: #ffe7bd;
+.hotzone-3 {
+  background: #b7e2a8;
+}
+
+.hotzone-4 {
+  background: #8fd083;
+}
+
+.hotzone-5 {
+  background: #5eb868;
+}
+
+.preference-frame-preferred,
+.preference-frame-acceptable,
+.preference-frame-last_resort {
+  --preference-frame-color: #4d9f21;
+}
+
+.preference-frame-acceptable {
+  --preference-frame-color: #2689c9;
+}
+
+.preference-frame-last_resort {
+  --preference-frame-color: #d98200;
+}
+
+.preference-frame-preferred::after,
+.preference-frame-acceptable::after,
+.preference-frame-last_resort::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--preference-frame-color);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.preference-frame-join-prev::after {
+  border-top-width: 0;
+}
+
+.preference-frame-join-next::after {
+  border-bottom-width: 0;
 }
 
 .lesson-block {
@@ -432,6 +504,10 @@ h3 {
   background: #eef2ed;
   font-size: var(--font-sm);
   text-transform: uppercase;
+}
+
+.student-select {
+  width: auto;
 }
 
 .tray-lesson {
