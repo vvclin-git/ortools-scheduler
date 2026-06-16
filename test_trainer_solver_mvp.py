@@ -2000,6 +2000,7 @@ class TrainerSolverMvpTests(unittest.TestCase):
         self.assertIn("MAX_SAVED_SOLUTIONS", script)
         self.assertIn("window.confirm", script)
         self.assertIn("structuredClone(currentSolution)", script)
+        self.assertNotIn("savedSolutions.length = 0", script)
         self.assertIn("saveVisibleSolution", script)
         self.assertIn("appendGeneratedLessonForStudent", script)
         self.assertIn("restoreUnsavedLessonRows", script)

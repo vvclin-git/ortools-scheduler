@@ -1206,7 +1206,6 @@ async function cleanSchedule() {
   evaluationResult = null;
   selectedGroupKey = null;
   selectedTrayKey = null;
-  savedSolutions.length = 0;
   renderLessonTable(appData.lesson_rows || []);
   renderSavedSolutions();
   renderSummary(currentSolution, appData.validation_warnings, evaluationResult);

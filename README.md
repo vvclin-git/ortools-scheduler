@@ -168,8 +168,8 @@ The Organizer page supports manual schedule review and repair:
 - Drag scheduled sessions to another day/time and drag unscheduled lessons from
   the left-side resizable tray into the calendar.
 - Review the full daily timeslot range in a compact Organizer layout that
-  scales the calendar row height and surrounding controls to the browser
-  viewport.
+  scales the calendar row height, shared typography, and surrounding controls
+  to the browser viewport.
 - Click a scheduled block to change its status; status changes are saved
   immediately for that session/group.
 - Switch the calendar background between trainer availability and the selected
@@ -178,8 +178,8 @@ The Organizer page supports manual schedule review and repair:
 - Review score and conflict diagnostics in the diagnostics panel and directly
   on affected calendar blocks.
 - Reset to the optimized solution, save temporary in-browser solution snapshots,
-  or export/import the visible schedule with the solver-readable booking CSV
-  format:
+  clear only the current working calendar, or export/import the visible schedule
+  with the solver-readable booking CSV format:
 
 ```csv
 booking_id,lesson_id,student_id,venue_id,start_datetime,end_datetime,status,lock_level
@@ -209,8 +209,8 @@ Data cleanup follows ownership rules to avoid old data mixing with new data:
   and stale solution data.
 - `Clean Lessons` immediately clears lessons, bookings, and stale solution
   data.
-- `Clean Schedule` immediately clears only booking times/statuses and persists
-  the cleared booking state.
+- `Clean Schedule` immediately clears only booking times/statuses, persists the
+  cleared booking state, and keeps temporary saved solution snapshots available.
 - Student CSV import replaces students/preferences and clears old
   lessons/bookings.
 - General scheduler CSV import validates files in a temporary staged copy
