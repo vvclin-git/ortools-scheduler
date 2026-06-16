@@ -1,1 +1,6 @@
 booking_id,lesson_id,student_id,venue_id,start_datetime,end_datetime,status,lock_level
+book_4001-1,4001-1,4001,gym_a,2026-05-04T20:00:00,2026-05-04T21:00:00,draft,1
+book_4001-2,4001-2,4001,gym_a,2026-05-05T14:30:00,2026-05-05T15:30:00,locked,3
+book_4002-1,4002-1,4002,gym_a,2026-05-04T20:00:00,2026-05-04T21:00:00,draft,1
+book_4010-1,4010-1,4010,gym_a,2026-05-04T20:00:00,2026-05-04T21:00:00,draft,1
+book_4013-2,4013-2,4013,gym_b,2026-05-06T14:30:00,2026-05-06T15:30:00,locked,3

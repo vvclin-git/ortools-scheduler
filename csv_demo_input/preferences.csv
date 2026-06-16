@@ -1,5 +1,6 @@
 student_id,day,start,end,level,score
 4001,Mon,19:00,21:00,preferred,100
+4001,Mon,10:00,12:00,preferred,100
 4002,Mon,19:30,21:00,preferred,100
 4003,Tue,19:00,21:00,preferred,100
 4004,Tue,19:30,21:00,preferred,100
