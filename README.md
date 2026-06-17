@@ -28,7 +28,8 @@ returns an optimized schedule plus a structured change summary.
 |-- run_solver_from_csv.py         # CSV loader and command-line runner
 |-- test_trainer_solver_mvp.py     # Unit tests for solver behavior
 |-- csv_input_schema.md            # CSV input contract
-|-- csv_demo_input/                # Demo CSV input folder
+|-- csv_demo_input/                # Tracked demo CSV fixture
+|-- csv_runtime_input/             # Ignored local web-app working copy
 |-- solution.json                  # Example generated solver output
 |-- request_debug.json             # Example generated debug payload
 |-- pyproject.toml                 # Python project metadata and dependencies
@@ -126,15 +127,18 @@ without the UI, edit or clear dependent CSV files directly. For example, after
 replacing `students.csv`, also update or clear `preferences.csv`, `lessons.csv`,
 and `existing_bookings.csv`.
 
-Run the local browser organizer:
+Run the local browser organizer against a local runtime copy so demo fixtures
+stay clean:
 
 ```bash
-uv run python schedule_web_app.py --input csv_demo_input --output solution.json --port 8001
+uv run python run_solver_from_csv.py --init-template csv_runtime_input
+uv run python schedule_web_app.py --input csv_runtime_input --output solution.json --port 8001
 ```
 
 On Windows, you can also double-click `run_web_app.cmd` from the project
-folder to start the app on port `8001` and open it in your default browser, or
-run it from PowerShell:
+folder to create `csv_runtime_input` from `csv_demo_input` when needed, start
+the app on port `8001`, and open it in your default browser. You can also run
+it from PowerShell:
 
 ```powershell
 .\run_web_app.cmd

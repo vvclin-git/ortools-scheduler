@@ -104,6 +104,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Setup config editing now excludes `planning_start`, `planning_end`, and
   `freeze_now` so the Organizer is the single planning-horizon and freeze-time
   editor.
+- `run_web_app.cmd` now uses an ignored `csv_runtime_input` working copy so
+  local organizer edits do not dirty the tracked demo CSV fixture.
 
 ### Fixed
 

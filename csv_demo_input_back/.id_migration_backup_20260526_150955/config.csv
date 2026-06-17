@@ -1,8 +1,0 @@
-key,value
-mode,in_week_reschedule
-planning_start,2026-05-04T09:00:00
-planning_end,2026-05-10T22:00:00
-slot_size_min,30
-max_solve_seconds,5.0
-freeze_now,2026-05-06T14:00:00
-freeze_buffer_hours,4

@@ -13,6 +13,13 @@ wheels/
 solution.json
 request_debug.json
 
+# Local scheduler runtime CSV input
+csv_runtime_input/
+local_input/
+.local_csv_input/
+csv_demo_input_back/
+**/.id_migration_backup_*/
+
 # Local packaged demo bundle
 csv_demo_input.zip
 

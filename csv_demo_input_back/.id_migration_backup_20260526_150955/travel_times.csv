@@ -1,5 +1,0 @@
-from_venue_id,to_venue_id,travel_min
-gym_a,gym_a,0
-gym_b,gym_b,0
-gym_a,gym_b,50
-gym_b,gym_a,50
